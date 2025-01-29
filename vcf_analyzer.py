@@ -257,41 +257,62 @@ class VariantAnnotator:
             'submission_count': 0
         }
 
-    def create_panel_specific_report(self, df, panel_type="solid"):
-        """Panel tipine özel rapor oluştur"""
-        panel_genes = self.solid_panel_genes if panel_type == "solid" else self.lung_panel_genes
-        panel_variants = df[df['gene_symbol'].isin(panel_genes)]
-        
-        report = {
-            'Panel Tipi': panel_type.upper(),
-            'Analiz Edilen Panel Genleri': len(panel_genes),
-            'Bulunan Panel Varyantları': len(panel_variants),
-            'Gen Bazlı Bulgular': {},
-            'Yolak Analizi': {}
+    def get_variant_effect(self, ref, alt):
+        """Varyant tipini ve etkisini belirle"""
+        if len(ref) == len(alt):
+            if len(ref) == 1:
+                return 'SNV'
+            else:
+                return 'MNV'
+        elif len(ref) > len(alt):
+            return 'Deletion'
+        else:
+            return 'Insertion'
+
+    def analyze_variant(self, chrom, pos, ref, alt, variant_id=None):
+        """Geliştirilmiş varyant analizi"""
+        gene_info = self.get_gene_info_from_ucsc(chrom, pos)
+        clinvar_info = self.get_clinvar_info(chrom, pos, ref, alt, variant_id)
+        variant_type = self.get_variant_effect(ref, alt)
+
+        # Varyant etkisini belirle
+        effect = ''
+        if len(ref) != len(alt):  # indel
+            if len(ref) > len(alt):
+                effect = 'frameshift_variant' if (len(ref) - len(alt)) % 3 != 0 else 'inframe_deletion'
+            else:
+                effect = 'frameshift_variant' if (len(alt) - len(ref)) % 3 != 0 else 'inframe_insertion'
+        else:  # SNV
+            if ref in ['A', 'G'] and alt in ['A', 'G']:  # transition
+                effect = 'transition'
+            elif ref in ['C', 'T'] and alt in ['C', 'T']:  # transition
+                effect = 'transition'
+            else:  # transversion
+                effect = 'transversion'
+
+        # Gene info kontrolü
+        gene_symbol = gene_info.get('gene_symbol') if gene_info else ''
+        is_cancer_gene = gene_info.get('is_cancer_gene', False) if gene_info else False
+        transcript = gene_info.get('transcript', '') if gene_info else ''
+
+        result = {
+            'chromosome': chrom,
+            'position': pos,
+            'reference': ref,
+            'alternate': alt,
+            'variant_type': variant_type,
+            'variant_effect': effect,
+            'gene_symbol': gene_symbol,
+            'is_cancer_gene': is_cancer_gene,
+            'transcript': transcript,
+            'in_clinvar': clinvar_info['found'],
+            'clinvar_significance': clinvar_info['significance'],
+            'clinvar_review_status': clinvar_info['review_status'],
+            'clinvar_last_evaluated': clinvar_info['last_evaluated'],
+            'clinvar_submission_count': clinvar_info['submission_count'],
+            'cancer_gene_description': self.cancer_genes.get(gene_symbol, '')
         }
-        
-        # Gen bazlı analiz
-        for gene in panel_genes:
-            gene_variants = panel_variants[panel_variants['gene_symbol'] == gene]
-            if not gene_variants.empty:
-                report['Gen Bazlı Bulgular'][gene] = {
-                    'Varyant Sayısı': len(gene_variants),
-                    'Varyant Tipleri': gene_variants['variant_effect'].unique().tolist(),
-                    'Yolak': self.cancer_genes.get(gene, 'Bilinmiyor')
-                }
-        
-        # Yolak analizi
-        pathway_variants = {}
-        for _, variant in panel_variants.iterrows():
-            gene = variant['gene_symbol']
-            pathway = self.cancer_genes.get(gene, 'Diğer')
-            if pathway not in pathway_variants:
-                pathway_variants[pathway] = 0
-            pathway_variants[pathway] += 1
-        
-        report['Yolak Analizi'] = pathway_variants
-        
-        return report
+        return result
 class VCFAnalyzer(VariantAnnotator):
     def __init__(self):
         super().__init__()
@@ -303,13 +324,17 @@ class VCFAnalyzer(VariantAnnotator):
         self.main_frame = ttk.Frame(self.root, padding="10")
         self.main_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Panel seçimi
-        self.panel_var = tk.StringVar(value="solid")
-        ttk.Label(self.main_frame, text="Panel Tipi:").pack(pady=5)
-        ttk.Radiobutton(self.main_frame, text="Solid Tümör Paneli", 
-                       variable=self.panel_var, value="solid").pack()
-        ttk.Radiobutton(self.main_frame, text="Akciğer Paneli", 
-                       variable=self.panel_var, value="lung").pack()
+        # Panel seçimi (opsiyonel)
+        self.panel_var = tk.StringVar(value="all")
+        panel_frame = ttk.LabelFrame(self.main_frame, text="Panel Tipi (Opsiyonel)", padding="5")
+        panel_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Radiobutton(panel_frame, text="Tüm Genler", 
+                       variable=self.panel_var, value="all").pack(side=tk.LEFT)
+        ttk.Radiobutton(panel_frame, text="Solid Tümör Paneli", 
+                       variable=self.panel_var, value="solid").pack(side=tk.LEFT)
+        ttk.Radiobutton(panel_frame, text="Akciğer Paneli", 
+                       variable=self.panel_var, value="lung").pack(side=tk.LEFT)
         
         ttk.Button(self.main_frame, text="VCF Dosyası Seç",
                   command=self.select_file).pack(pady=5)
@@ -338,7 +363,10 @@ class VCFAnalyzer(VariantAnnotator):
         try:
             patient_id = self.extract_patient_id(vcf_file)
             panel_type = self.panel_var.get()
-            self.update_status(f"Analiz başlıyor: {patient_id} ({panel_type.upper()} Panel)")
+            status_text = f"Analiz başlıyor: {patient_id}"
+            if panel_type != "all":
+                status_text += f" ({panel_type.upper()} Panel)"
+            self.update_status(status_text)
             
             variants = self.read_vcf(vcf_file)
             total_variants = len(variants)
@@ -365,14 +393,24 @@ class VCFAnalyzer(VariantAnnotator):
                     print(f"Varyant analiz hatası: {str(e)}")
 
             df = pd.DataFrame(results)
-            panel_report = self.create_panel_specific_report(df, panel_type)
-            self.save_excel_report(df, patient_id, panel_report)
+            
+            # Panel raporu sadece panel seçiliyse oluşturulur
+            if panel_type != "all":
+                panel_report = self.create_panel_specific_report(df, panel_type)
+                self.save_excel_report(df, patient_id, panel_type, panel_report)
+            else:
+                self.save_excel_report(df, patient_id, "all", None)
+            
             self.create_visualizations(df, patient_id, panel_type)
             
             self.update_status(f"Analiz tamamlandı!", 100)
-            messagebox.showinfo("Analiz Tamamlandı", 
-                              f"Toplam {len(df)} varyant analiz edildi.\n"
-                              f"Panel genlerinde {panel_report['Bulunan Panel Varyantları']} varyant bulundu.")
+            
+            completion_message = f"Toplam {len(df)} varyant analiz edildi."
+            if panel_type != "all":
+                panel_genes = self.solid_panel_genes if panel_type == "solid" else self.lung_panel_genes
+                panel_variants = df[df['gene_symbol'].isin(panel_genes)]
+                completion_message += f"\nPanel genlerinde {len(panel_variants)} varyant bulundu."
+            messagebox.showinfo("Analiz Tamamlandı", completion_message)
             
         except Exception as e:
             self.update_status(f"Hata: {str(e)}")
@@ -390,14 +428,21 @@ class VCFAnalyzer(VariantAnnotator):
         plt.title('Varyant Tipi Dağılımı')
         plt.xticks(rotation=45)
         
-        # 2. Panel genleri
+        # 2. Gen dağılımı
         plt.subplot(2, 3, 2)
-        panel_genes = self.solid_panel_genes if panel_type == "solid" else self.lung_panel_genes
-        panel_df = df[df['gene_symbol'].isin(panel_genes)]
-        if not panel_df.empty:
-            sns.countplot(data=panel_df, y='gene_symbol', 
-                         order=panel_df['gene_symbol'].value_counts().index)
-        plt.title(f'{panel_type.upper()} Panel Genleri Dağılımı')
+        if panel_type != "all":
+            panel_genes = self.solid_panel_genes if panel_type == "solid" else self.lung_panel_genes
+            panel_df = df[df['gene_symbol'].isin(panel_genes)]
+            if not panel_df.empty:
+                sns.countplot(data=panel_df, y='gene_symbol', 
+                            order=panel_df['gene_symbol'].value_counts().index)
+                plt.title(f'{panel_type.upper()} Panel Genleri Dağılımı')
+        else:
+            cancer_df = df[df['is_cancer_gene']]
+            if not cancer_df.empty:
+                sns.countplot(data=cancer_df, y='gene_symbol',
+                            order=cancer_df['gene_symbol'].value_counts().head(15).index)
+                plt.title('En Sık Görülen Kanser Genleri (Top 15)')
         
         # 3. Varyant etki dağılımı
         plt.subplot(2, 3, 3)
@@ -410,72 +455,100 @@ class VCFAnalyzer(VariantAnnotator):
         for _, row in df[df['is_cancer_gene']].iterrows():
             pathway_data.append(self.cancer_genes.get(row['gene_symbol'], 'Diğer'))
         pathway_series = pd.Series(pathway_data)
-        sns.countplot(y=pathway_series)
-        plt.title('Yolak Dağılımı')
+        if not pathway_series.empty:
+            sns.countplot(y=pathway_series, order=pathway_series.value_counts().head(10).index)
+            plt.title('En Sık Görülen Yolaklar (Top 10)')
         
-        # 5. Panel vs Non-panel gen oranı
+        # 5. Kanser geni oranı
         plt.subplot(2, 3, 5)
-        panel_ratio = pd.Series({
-            'Panel Genleri': len(df[df['gene_symbol'].isin(panel_genes)]),
-            'Diğer Genler': len(df[~df['gene_symbol'].isin(panel_genes)])
-        })
-        plt.pie(panel_ratio, labels=panel_ratio.index, autopct='%1.1f%%')
-        plt.title('Panel Genleri Oranı')
+        if panel_type != "all":
+            panel_genes = self.solid_panel_genes if panel_type == "solid" else self.lung_panel_genes
+            ratio_labels = ['Panel Genleri', 'Diğer Genler']
+            ratio_values = [
+                len(df[df['gene_symbol'].isin(panel_genes)]),
+                len(df[~df['gene_symbol'].isin(panel_genes)])
+            ]
+        else:
+            ratio_labels = ['Kanser Genleri', 'Diğer Genler']
+            ratio_values = [
+                len(df[df['is_cancer_gene']]),
+                len(df[~df['is_cancer_gene']])
+            ]
+        plt.pie(ratio_values, labels=ratio_labels, autopct='%1.1f%%')
+        plt.title('Gen Dağılım Oranı')
         
         plt.tight_layout()
-        plt.savefig(f'{patient_id}_{panel_type}_panel_analysis.png', dpi=300, bbox_inches='tight')
+        plt.savefig(f'{patient_id}_analysis_plots.png', dpi=300, bbox_inches='tight')
         plt.close()
 
-    def save_excel_report(self, df, patient_id, panel_report):
+    def save_excel_report(self, df, patient_id, panel_type, panel_report=None):
         """Geliştirilmiş Excel raporu"""
-        output_file = f"{patient_id}_panel_analysis.xlsx"
+        output_file = f"{patient_id}_mutation_analysis.xlsx"
         with pd.ExcelWriter(output_file, engine='xlsxwriter') as writer:
             workbook = writer.book
-            
-            # Formatlar
-            header_format = workbook.add_format({
-                'bold': True,
-                'bg_color': '#D7E4BC',
-                'border': 1
-            })
-            
-            # Panel özet sayfası
-            panel_summary = pd.DataFrame([
-                {'Metrik': k, 'Değer': v} 
-                for k, v in panel_report.items() 
-                if not isinstance(v, dict)
-            ])
-            panel_summary.to_excel(writer, sheet_name='Panel_Summary', index=False)
-            
-            # Gen bazlı bulgular
-            gene_findings = pd.DataFrame([
-                {
-                    'Gen': gene,
-                    'Varyant Sayısı': info['Varyant Sayısı'],
-                    'Varyant Tipleri': ', '.join(info['Varyant Tipleri']),
-                    'Yolak': info['Yolak']
-                }
-                for gene, info in panel_report['Gen Bazlı Bulgular'].items()
-            ])
-            if not gene_findings.empty:
-                gene_findings.to_excel(writer, sheet_name='Gene_Findings', index=False)
-            
-            # Yolak analizi
-            pathway_analysis = pd.DataFrame([
-                {'Yolak': k, 'Varyant Sayısı': v}
-                for k, v in panel_report['Yolak Analizi'].items()
-            ])
-            if not pathway_analysis.empty:
-                pathway_analysis.to_excel(writer, sheet_name='Pathway_Analysis', index=False)
             
             # Tüm varyantlar
             df.to_excel(writer, sheet_name='All_Variants', index=False)
             
-            # Panel varyantları
-            panel_genes = self.solid_panel_genes if panel_report['Panel Tipi'] == 'SOLID' else self.lung_panel_genes
-            panel_variants = df[df['gene_symbol'].isin(panel_genes)]
-            if not panel_variants.empty:
-                panel_variants.to_excel(writer, sheet_name='Panel_Variants', index=False)
+            # Kanser genleri
+            cancer_variants = df[df['is_cancer_gene']].sort_values(
+                by=['variant_effect', 'gene_symbol'],
+                ascending=[False, True]
+            )
+            if not cancer_variants.empty:
+                cancer_variants.to_excel(writer, sheet_name='Cancer_Genes', index=False)
+            
+            # Panel-spesifik varyantlar
+            if panel_type != "all":
+                panel_genes = self.solid_panel_genes if panel_type == "solid" else self.lung_panel_genes
+                panel_variants = df[df['gene_symbol'].isin(panel_genes)]
+                if not panel_variants.empty:
+                    panel_variants.to_excel(writer, sheet_name='Panel_Variants', index=False)
+            
+            # Yüksek etkili varyantlar
+            high_impact = df[df['variant_effect'].isin(['frameshift_variant', 'inframe_deletion'])]
+            if not high_impact.empty:
+                high_impact.to_excel(writer, sheet_name='High_Impact_Variants', index=False)
+            
+            # Özet istatistikler
+            summary_data = {
+                'Metrik': [
+                    'Toplam Varyant Sayısı',
+                    'Kanser Geni Varyantları',
+                    'ClinVar Varyantları',
+                    'Frameshift Varyant Sayısı',
+                    'SNV Sayısı',
+                    'İnsersiyon Sayısı',
+                    'Delesyon Sayısı',
+                    'Transition Sayısı',
+                    'Transversion Sayısı'
+                ],
+                'Değer': [
+                    len(df),
+                    len(cancer_variants),
+                    df['in_clinvar'].sum(),
+                    len(df[df['variant_effect'] == 'frameshift_variant']),
+                    len(df[df['variant_type'] == 'SNV']),
+                    len(df[df['variant_type'] == 'Insertion']),
+                    len(df[df['variant_type'] == 'Deletion']),
+                    len(df[df['variant_effect'] == 'transition']),
+                    len(df[df['variant_effect'] == 'transversion'])
+                ]
+            }
+            
+            if panel_type != "all":
+                panel_genes = self.solid_panel_genes if panel_type == "solid" else self.lung_panel_genes
+                panel_variants = df[df['gene_symbol'].isin(panel_genes)]
+                summary_data['Metrik'].extend([
+                    'Panel Genleri Varyantları',
+                    'Panel Genleri Oranı (%)'
+                ])
+                summary_data['Değer'].extend([
+                    len(panel_variants),
+                    round(len(panel_variants) / len(df) * 100, 2)
+                ])
+            
+            pd.DataFrame(summary_data).to_excel(writer, sheet_name='Summary', index=False)
 
     def read_vcf(self, vcf_file):
         variants = []
