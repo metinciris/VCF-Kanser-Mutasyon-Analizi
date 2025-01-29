@@ -78,12 +78,6 @@ MIT
 4. Push edin (`git push origin feature/AmazingFeature`)
 5. Pull Request oluşturun
 
-## İletişim
-
-[E-posta adresiniz] - İletişim için
-
-Proje Linki: [https://github.com/yourusername/vcf-cancer-analyzer](https://github.com/yourusername/vcf-cancer-analyzer)
-
 ## Teşekkürler
 
 - UCSC Genome Browser
