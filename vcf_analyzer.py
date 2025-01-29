@@ -146,7 +146,7 @@ class VariantAnnotator:
             'last_evaluated': '',
             'submission_count': 0
         }
-          def _get_variant_details(self, clinvar_id):
+    def _get_variant_details(self, clinvar_id):
         """Geliştirilmiş ClinVar varyant detayları"""
         try:
             summary_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
@@ -281,7 +281,7 @@ class VariantAnnotator:
             })
         
         return summary
-      class VCFAnalyzer(VariantAnnotator):
+class VCFAnalyzer(VariantAnnotator):
     def __init__(self):
         super().__init__()
         self.root = tk.Tk()
