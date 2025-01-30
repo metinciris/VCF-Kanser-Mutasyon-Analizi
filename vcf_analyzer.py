@@ -402,10 +402,10 @@ class VCFAnalyzer(MultiDBVariantAnnotator):
         self.main_frame.pack(fill=tk.BOTH, expand=True)
         
         # Panel seçimi
-        panel_frame = ttk.LabelFrame(self.main_frame, text="Panel Tipi (Opsiyonel)", padding="5")
+        panel_frame = ttk.LabelFrame(self.main_frame, text="Panel Tipi", padding="5")
         panel_frame.pack(fill=tk.X, pady=5)
         
-        self.panel_var = tk.StringVar(value="all")
+        self.panel_var = tk.StringVar(value="all")  # Varsayılan değer
         ttk.Radiobutton(panel_frame, text="Tüm Genler", 
                        variable=self.panel_var, value="all").pack(side=tk.LEFT)
         ttk.Radiobutton(panel_frame, text="Solid Tümör Paneli", 
@@ -455,34 +455,32 @@ class VCFAnalyzer(MultiDBVariantAnnotator):
                 if line.startswith('#'):
                     continue
                 fields = line.strip().split('\t')
-                if len(fields) >= 8:  # FORMAT ve SAMPLE alanlarını da kontrol et
-                    info = dict(item.split('=') for item in fields[7].split(';') if '=' in item)
-                    format_fields = fields[8].split(':') if len(fields) > 8 else []
-                    sample_fields = fields[9].split(':') if len(fields) > 9 else []
+                if len(fields) >= 10:  # FORMAT ve SAMPLE alanlarını kontrol et
+                    format_fields = fields[8].split(':')
+                    sample_fields = fields[9].split(':')
                     
-                    # DP (Depth) ve AF (Allele Frequency) değerlerini al
+                    # DP ve CLCAD2 indekslerini bul
+                    dp_idx = format_fields.index('DP') if 'DP' in format_fields else -1
+                    clcad2_idx = format_fields.index('CLCAD2') if 'CLCAD2' in format_fields else -1
+                    
+                    # Okuma derinliği (DP)
                     dp = '-'
+                    if dp_idx != -1 and len(sample_fields) > dp_idx:
+                        dp = sample_fields[dp_idx]
+
+                    # Varyant yüzdesi (VAF)
                     vaf = '-'
-                    
-                    # INFO alanından
-                    if 'DP' in info:
-                        dp = info['DP']
-                    # FORMAT alanından
-                    elif 'DP' in format_fields and len(sample_fields) > format_fields.index('DP'):
-                        dp = sample_fields[format_fields.index('DP')]
-                    
-                    # Allel frekansını hesapla
-                    if 'AF' in info:
-                        vaf = f"{float(info['AF'])*100:.1f}%"
-                    elif 'AD' in format_fields and len(sample_fields) > format_fields.index('AD'):
-                        ad = sample_fields[format_fields.index('AD')].split(',')
-                        if len(ad) >= 2 and dp != '-':
-                            try:
-                                ref_depth = int(ad[0])
-                                alt_depth = int(ad[1])
-                                vaf = f"{(alt_depth/(ref_depth+alt_depth))*100:.1f}%"
-                            except:
-                                pass
+                    if clcad2_idx != -1 and len(sample_fields) > clcad2_idx:
+                        try:
+                            ad_values = sample_fields[clcad2_idx].split(',')
+                            if len(ad_values) >= 2:
+                                ref_depth = int(ad_values[0])
+                                alt_depth = int(ad_values[1])
+                                total_depth = ref_depth + alt_depth
+                                if total_depth > 0:
+                                    vaf = f"{(alt_depth/total_depth)*100:.2f}%"
+                        except:
+                            pass
 
                     variants.append({
                         'CHROM': fields[0],
@@ -720,11 +718,14 @@ class VCFAnalyzer(MultiDBVariantAnnotator):
         sns.countplot(data=df, y='Klinik Etki')
         plt.title('Klinik Etki Dağılımı')
         
-        # 5. Okuma derinliği dağılımı
+        # 5. Okuma derinliği ve VAF dağılımı
         plt.subplot(2, 3, 5)
         df['Okuma Derinliği'] = pd.to_numeric(df['Okuma Derinliği'].replace('-', '0'))
-        sns.histplot(data=df, x='Okuma Derinliği', bins=30)
-        plt.title('Okuma Derinliği Dağılımı')
+        df['Varyant Yüzdesi'] = pd.to_numeric(df['Varyant Yüzdesi'].str.rstrip('%').replace('-', '0'))
+        plt.scatter(df['Okuma Derinliği'], df['Varyant Yüzdesi'], alpha=0.5)
+        plt.xlabel('Okuma Derinliği')
+        plt.ylabel('Varyant Yüzdesi (%)')
+        plt.title('Okuma Derinliği vs Varyant Yüzdesi')
         
         plt.tight_layout()
         plt.savefig(f'{patient_id}_analiz_grafikleri.png', dpi=300, bbox_inches='tight')
