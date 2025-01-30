@@ -178,50 +178,6 @@ class MultiDBVariantAnnotator:
             print(f"UCSC API hatası: {str(e)}")
         return None
 
-    def get_variant_annotations(self, chrom, pos, ref, alt, gene_symbol=None):
-        """Çeşitli veritabanlarından varyant bilgilerini çek"""
-        cache_key = f"{chrom}:{pos}:{ref}>{alt}"
-        if cache_key in self.cache:
-            return self.cache[cache_key]
-
-        annotations = {
-            'ClinVar': {},
-            'gnomAD': {},
-            'MyVariant': {},
-            'dbSNP': {}
-        }
-        
-        try:
-            # ClinVar sorgusu
-            clinvar_info = self.get_clinvar_info(chrom, pos, ref, alt)
-            annotations['ClinVar'] = clinvar_info
-
-            # MyVariant.info sorgusu
-            hgvs = f"chr{chrom}:g.{pos}{ref}>{alt}"
-            myvariant_response = requests.get(f"{self.api_sources['MyVariant']}{hgvs}")
-            if myvariant_response.ok:
-                myvariant_data = myvariant_response.json()
-                annotations['MyVariant'] = {
-                    'CADD Skoru': myvariant_data.get('cadd', {}).get('phred', ''),
-                    'SIFT Tahmini': myvariant_data.get('dbnsfp', {}).get('sift_pred', ''),
-                    'PolyPhen Tahmini': myvariant_data.get('dbnsfp', {}).get('polyphen2_hdiv_pred', '')
-                }
-
-            # gnomAD sorgusu
-            gnomad_response = requests.get(f"{self.api_sources['gnomAD']}{chrom}-{pos}-{ref}-{alt}")
-            if gnomad_response.ok:
-                gnomad_data = gnomad_response.json()
-                annotations['gnomAD'] = {
-                    'Allel Frekansı': gnomad_data.get('af', {}).get('af', ''),
-                    'Filtre': gnomad_data.get('filters', [])
-                }
-
-        except Exception as e:
-            print(f"Varyant anotasyon hatası: {str(e)}")
-
-        self.cache[cache_key] = annotations
-        return annotations
-
     def get_clinvar_info(self, chrom, pos, ref, alt, variant_id=None):
         """Geliştirilmiş ClinVar bilgisi"""
         try:
@@ -253,18 +209,6 @@ class MultiDBVariantAnnotator:
                     if int(data['esearchresult'].get('count', 0)) > 0:
                         return self._get_variant_details(data['esearchresult']['idlist'][0])
 
-            # Genişletilmiş koordinat sorgusu
-            params = {
-                'db': 'clinvar',
-                'term': f"{chrom}[Chr] AND {pos}[Base Position] AND {ref}[Reference allele] AND {alt}[Alternate allele]",
-                'retmode': 'json'
-            }
-            response = requests.get(self.api_sources['ClinVar'], params=params)
-            if response.ok:
-                data = response.json()
-                if int(data['esearchresult'].get('count', 0)) > 0:
-                    return self._get_variant_details(data['esearchresult']['idlist'][0])
-
         except Exception as e:
             print(f"ClinVar sorgu hatası: {str(e)}")
         
@@ -276,6 +220,36 @@ class MultiDBVariantAnnotator:
             'Son Değerlendirme': '',
             'Başvuru Sayısı': 0
         }
+
+    def get_gnomad_info(self, chrom, pos, ref, alt):
+        """gnomAD bilgisi"""
+        try:
+            response = requests.get(f"{self.api_sources['gnomAD']}{chrom}-{pos}-{ref}-{alt}")
+            if response.ok:
+                data = response.json()
+                return {
+                    'Allel Frekansı': data.get('af', {}).get('af', ''),
+                    'Filtre': data.get('filters', [])
+                }
+        except Exception as e:
+            print(f"gnomAD sorgu hatası: {str(e)}")
+        return {}
+
+    def get_myvariant_info(self, chrom, pos, ref, alt):
+        """MyVariant.info bilgisi"""
+        try:
+            hgvs = f"chr{chrom}:g.{pos}{ref}>{alt}"
+            response = requests.get(f"{self.api_sources['MyVariant']}{hgvs}")
+            if response.ok:
+                data = response.json()
+                return {
+                    'CADD Skoru': data.get('cadd', {}).get('phred', ''),
+                    'SIFT Tahmini': data.get('dbnsfp', {}).get('sift_pred', ''),
+                    'PolyPhen Tahmini': data.get('dbnsfp', {}).get('polyphen2_hdiv_pred', '')
+                }
+        except Exception as e:
+            print(f"MyVariant.info sorgu hatası: {str(e)}")
+        return {}
 
     def _get_variant_details(self, clinvar_id):
         """Geliştirilmiş ClinVar varyant detayları"""
@@ -317,11 +291,30 @@ class MultiDBVariantAnnotator:
             'Son Değerlendirme': '',
             'Başvuru Sayısı': 0
         }
-    def analyze_variant(self, chrom, pos, ref, alt, variant_id=None):
+
+    def analyze_variant(self, chrom, pos, ref, alt, variant_id=None, dp='-', vaf='-'):
         """Geliştirilmiş varyant analizi"""
         gene_info = self.get_gene_info_from_ucsc(chrom, pos)
-        variant_annotations = self.get_variant_annotations(chrom, pos, ref, alt, gene_info.get('Gen') if gene_info else None)
         
+        # Veritabanı sorgularını kontrol et
+        variant_annotations = {
+            'ClinVar': {'Bulundu': False},
+            'gnomAD': {},
+            'MyVariant': {}
+        }
+        
+        if hasattr(self, 'clinvar_var') and self.clinvar_var.get():
+            clinvar_info = self.get_clinvar_info(chrom, pos, ref, alt, variant_id)
+            variant_annotations['ClinVar'] = clinvar_info
+        
+        if hasattr(self, 'gnomad_var') and self.gnomad_var.get():
+            gnomad_info = self.get_gnomad_info(chrom, pos, ref, alt)
+            variant_annotations['gnomAD'] = gnomad_info
+        
+        if hasattr(self, 'myvariant_var') and self.myvariant_var.get():
+            myvariant_info = self.get_myvariant_info(chrom, pos, ref, alt)
+            variant_annotations['MyVariant'] = myvariant_info
+
         # Varyant tipini belirle
         if len(ref) == len(alt):
             variant_type = 'SNV' if len(ref) == 1 else 'MNV'
@@ -376,6 +369,8 @@ class MultiDBVariantAnnotator:
             'Pozisyon': pos,
             'Referans': ref,
             'Alternatif': alt,
+            'Okuma Derinliği': dp,
+            'Varyant Yüzdesi': vaf,
             'Varyant Tipi': variant_type,
             'Varyant Etkisi': effect,
             'Mutasyon Tipi': mutation_type,
@@ -383,7 +378,7 @@ class MultiDBVariantAnnotator:
             'Protein Fonksiyonu': protein_function,
             'Klinik Etki': clinical_impact,
             'Gen': gene_info.get('Gen', '-'),
-            'Kanser Geni': '+' if gene_info.get('Kanser Geni', False) else '-',
+            'Kanser Geni': '+' if gene_info and gene_info.get('Kanser Geni') else '-',
             'Kanser Tipi': self.cancer_genes.get(gene_info.get('Gen', ''), '-'),
             'Transkript': gene_info.get('Transkript', '-'),
             'ClinVar': '+' if variant_annotations['ClinVar'].get('Bulundu', False) else '-',
@@ -395,7 +390,6 @@ class MultiDBVariantAnnotator:
             'PolyPhen': variant_annotations['MyVariant'].get('PolyPhen Tahmini', '-')
         }
         return result
-
 class VCFAnalyzer(MultiDBVariantAnnotator):
     def __init__(self):
         super().__init__()
@@ -407,17 +401,29 @@ class VCFAnalyzer(MultiDBVariantAnnotator):
         self.main_frame = ttk.Frame(self.root, padding="10")
         self.main_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Panel seçimi (opsiyonel)
-        self.panel_var = tk.StringVar(value="all")
+        # Panel seçimi
         panel_frame = ttk.LabelFrame(self.main_frame, text="Panel Tipi (Opsiyonel)", padding="5")
         panel_frame.pack(fill=tk.X, pady=5)
         
+        self.panel_var = tk.StringVar(value="all")
         ttk.Radiobutton(panel_frame, text="Tüm Genler", 
                        variable=self.panel_var, value="all").pack(side=tk.LEFT)
         ttk.Radiobutton(panel_frame, text="Solid Tümör Paneli", 
                        variable=self.panel_var, value="solid").pack(side=tk.LEFT)
         ttk.Radiobutton(panel_frame, text="Akciğer Paneli", 
                        variable=self.panel_var, value="lung").pack(side=tk.LEFT)
+
+        # Veritabanı seçimi
+        db_frame = ttk.LabelFrame(self.main_frame, text="Veritabanı Sorguları (Opsiyonel)", padding="5")
+        db_frame.pack(fill=tk.X, pady=5)
+        
+        self.clinvar_var = tk.BooleanVar(value=False)
+        self.gnomad_var = tk.BooleanVar(value=False)
+        self.myvariant_var = tk.BooleanVar(value=False)
+        
+        ttk.Checkbutton(db_frame, text="ClinVar", variable=self.clinvar_var).pack(side=tk.LEFT)
+        ttk.Checkbutton(db_frame, text="gnomAD", variable=self.gnomad_var).pack(side=tk.LEFT)
+        ttk.Checkbutton(db_frame, text="MyVariant.info", variable=self.myvariant_var).pack(side=tk.LEFT)
         
         ttk.Button(self.main_frame, text="VCF Dosyası Seç",
                   command=self.select_file).pack(pady=5)
@@ -442,6 +448,53 @@ class VCFAnalyzer(MultiDBVariantAnnotator):
             self.progress['value'] = progress
         self.root.update()
 
+    def read_vcf(self, vcf_file):
+        variants = []
+        with open(vcf_file, 'r') as f:
+            for line in f:
+                if line.startswith('#'):
+                    continue
+                fields = line.strip().split('\t')
+                if len(fields) >= 8:  # FORMAT ve SAMPLE alanlarını da kontrol et
+                    info = dict(item.split('=') for item in fields[7].split(';') if '=' in item)
+                    format_fields = fields[8].split(':') if len(fields) > 8 else []
+                    sample_fields = fields[9].split(':') if len(fields) > 9 else []
+                    
+                    # DP (Depth) ve AF (Allele Frequency) değerlerini al
+                    dp = '-'
+                    vaf = '-'
+                    
+                    # INFO alanından
+                    if 'DP' in info:
+                        dp = info['DP']
+                    # FORMAT alanından
+                    elif 'DP' in format_fields and len(sample_fields) > format_fields.index('DP'):
+                        dp = sample_fields[format_fields.index('DP')]
+                    
+                    # Allel frekansını hesapla
+                    if 'AF' in info:
+                        vaf = f"{float(info['AF'])*100:.1f}%"
+                    elif 'AD' in format_fields and len(sample_fields) > format_fields.index('AD'):
+                        ad = sample_fields[format_fields.index('AD')].split(',')
+                        if len(ad) >= 2 and dp != '-':
+                            try:
+                                ref_depth = int(ad[0])
+                                alt_depth = int(ad[1])
+                                vaf = f"{(alt_depth/(ref_depth+alt_depth))*100:.1f}%"
+                            except:
+                                pass
+
+                    variants.append({
+                        'CHROM': fields[0],
+                        'POS': fields[1],
+                        'ID': fields[2],
+                        'REF': fields[3],
+                        'ALT': fields[4],
+                        'DP': dp,
+                        'VAF': vaf
+                    })
+        return variants
+
     def analyze_vcf(self, vcf_file):
         try:
             patient_id = self.extract_patient_id(vcf_file)
@@ -462,7 +515,9 @@ class VCFAnalyzer(MultiDBVariantAnnotator):
                         str(variant['POS']),
                         str(variant['REF']),
                         str(variant['ALT']),
-                        variant['ID']
+                        variant['ID'],
+                        variant['DP'],
+                        variant['VAF']
                     )
                     results.append(result)
                     
@@ -509,26 +564,55 @@ class VCFAnalyzer(MultiDBVariantAnnotator):
                     'border': 1
                 })
                 
+                # Sütun sıralaması
+                column_order = [
+                    'Kromozom',
+                    'Pozisyon',
+                    'Referans',
+                    'Alternatif',
+                    'Okuma Derinliği',
+                    'Varyant Yüzdesi',
+                    'Varyant Tipi',
+                    'Varyant Etkisi',
+                    'Mutasyon Tipi',
+                    'Protein Etkisi',
+                    'Protein Fonksiyonu',
+                    'Klinik Etki',
+                    'Gen',
+                    'Kanser Geni',
+                    'Kanser Tipi',
+                    'Transkript'
+                ]
+                
+                # Veritabanı sorgularına göre ek sütunlar
+                if self.clinvar_var.get():
+                    column_order.extend(['ClinVar', 'ClinVar Önemi', 'ClinVar Durumu'])
+                if self.gnomad_var.get():
+                    column_order.append('gnomAD Frekans')
+                if self.myvariant_var.get():
+                    column_order.extend(['CADD Skoru', 'SIFT', 'PolyPhen'])
+                
                 # Tüm varyantlar
-                df.to_excel(writer, sheet_name='Tüm Varyantlar', index=False)
+                df_ordered = df[column_order]
+                df_ordered.to_excel(writer, sheet_name='Tüm Varyantlar', index=False)
                 
                 # Kanser genleri
                 cancer_variants = df[df['Kanser Geni'] == '+'].sort_values(
                     by=['Klinik Etki', 'Gen'],
                     ascending=[False, True]
-                )
+                )[column_order]
                 if not cancer_variants.empty:
                     cancer_variants.to_excel(writer, sheet_name='Kanser Genleri', index=False)
                 
                 # Panel-spesifik varyantlar
                 if panel_type != "all":
                     panel_genes = self.solid_panel_genes if panel_type == "solid" else self.lung_panel_genes
-                    panel_variants = df[df['Gen'].isin(panel_genes)]
+                    panel_variants = df[df['Gen'].isin(panel_genes)][column_order]
                     if not panel_variants.empty:
                         panel_variants.to_excel(writer, sheet_name='Panel Varyantları', index=False)
                 
                 # Yüksek etkili varyantlar
-                high_impact = df[df['Klinik Etki'] == 'Yüksek']
+                high_impact = df[df['Klinik Etki'] == 'Yüksek'][column_order]
                 if not high_impact.empty:
                     high_impact.to_excel(writer, sheet_name='Yüksek Etkili', index=False)
                 
@@ -551,7 +635,7 @@ class VCFAnalyzer(MultiDBVariantAnnotator):
                     'Değer': [
                         len(df),
                         len(df[df['Kanser Geni'] == '+']),
-                        len(df[df['ClinVar'] == '+']),
+                        len(df[df['ClinVar'] == '+']) if 'ClinVar' in df.columns else 0,
                         len(df[df['Varyant Etkisi'] == 'frameshift_variant']),
                         len(df[df['Varyant Tipi'] == 'SNV']),
                         len(df[df['Varyant Tipi'] == 'İnsersiyon']),
@@ -581,9 +665,9 @@ class VCFAnalyzer(MultiDBVariantAnnotator):
                 # Her sayfa için sütun genişliklerini ayarla
                 for sheet_name in writer.sheets:
                     worksheet = writer.sheets[sheet_name]
-                    for idx, col in enumerate(df.columns):
+                    for idx, col in enumerate(df_ordered.columns):
                         max_length = max(
-                            df[col].astype(str).apply(len).max(),
+                            df_ordered[col].astype(str).apply(len).max(),
                             len(col)
                         ) + 2
                         worksheet.set_column(idx, idx, min(max_length, 30))
@@ -636,31 +720,15 @@ class VCFAnalyzer(MultiDBVariantAnnotator):
         sns.countplot(data=df, y='Klinik Etki')
         plt.title('Klinik Etki Dağılımı')
         
-        # 5. Protein etki dağılımı
+        # 5. Okuma derinliği dağılımı
         plt.subplot(2, 3, 5)
-        sns.countplot(data=df, y='Protein Fonksiyonu')
-        plt.title('Protein Fonksiyon Dağılımı')
+        df['Okuma Derinliği'] = pd.to_numeric(df['Okuma Derinliği'].replace('-', '0'))
+        sns.histplot(data=df, x='Okuma Derinliği', bins=30)
+        plt.title('Okuma Derinliği Dağılımı')
         
         plt.tight_layout()
         plt.savefig(f'{patient_id}_analiz_grafikleri.png', dpi=300, bbox_inches='tight')
         plt.close()
-
-    def read_vcf(self, vcf_file):
-        variants = []
-        with open(vcf_file, 'r') as f:
-            for line in f:
-                if line.startswith('#'):
-                    continue
-                fields = line.strip().split('\t')
-                if len(fields) >= 5:
-                    variants.append({
-                        'CHROM': fields[0],
-                        'POS': fields[1],
-                        'ID': fields[2],
-                        'REF': fields[3],
-                        'ALT': fields[4]
-                    })
-        return variants
 
     def extract_patient_id(self, vcf_path):
         try:
