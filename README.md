@@ -2,7 +2,7 @@
 
 Bu araç, VCF (Variant Call Format) dosyalarındaki genetik varyantları analiz ederek kanser ile ilişkili mutasyonları tespit eden ve detaylı raporlar oluşturan bir Python uygulamasıdır.
 
-![Program Arayüzü](screen.png)
+![Program Arayüzü](screen.PNG)
 
 ## Özellikler
 
@@ -21,7 +21,7 @@ Bu araç, VCF (Variant Call Format) dosyalarındaki genetik varyantları analiz 
 - ALK, EGFR (Akciğer Kanseri)
 - KRAS (Kolorektal/Akciğer Kanseri)
 - BRAF (Melanom/Kolorektal Kanser)
-- Ve 25+ diğer kanser geni
+- Ve diğer PANEL kanser genleri
 
 ## Kurulum
 
