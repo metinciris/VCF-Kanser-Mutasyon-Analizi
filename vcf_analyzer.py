@@ -129,6 +129,55 @@ class MultiDBVariantAnnotator:
             'LOW': ['synonymous', 'splice_region', 'intronic', 'upstream', 'downstream'],
             'MODIFIER': ['intergenic', 'non_coding_transcript', 'regulatory_region']
         }
+    def get_gene_info_from_ucsc(self, chrom, pos):
+        """UCSC API'den geliştirilmiş gen bilgisi"""
+        cache_key = f"ucsc_{chrom}:{pos}"
+        if cache_key in self.cache:
+            return self.cache[cache_key]
+
+        url = f"https://api.genome.ucsc.edu/getData/track?"
+        params = {
+            'genome': 'hg19',
+            'track': 'refGene,knownGene,ensGene',
+            'chrom': f'chr{chrom}',
+            'start': int(pos)-1,
+            'end': pos
+        }
+
+        try:
+            response = requests.get(url, params=params, timeout=10)
+            if response.ok:
+                data = response.json()
+                gene_info = {
+                    'Gene Symbol': None,
+                    'Transcript': None,
+                    'Strand': None,
+                    'Exon Count': None,
+                    'Is Cancer Gene': False,
+                    'Gene Type': None,
+                    'In Solid Panel': False,
+                    'In Lung Panel': False
+                }
+
+                if 'refGene' in data and data['refGene']:
+                    ref_gene = data['refGene'][0]
+                    gene_symbol = ref_gene.get('name2')
+                    gene_info.update({
+                        'Gene Symbol': gene_symbol,
+                        'Transcript': ref_gene.get('name'),
+                        'Strand': ref_gene.get('strand'),
+                        'Exon Count': ref_gene.get('exonCount'),
+                        'Is Cancer Gene': gene_symbol in self.cancer_genes,
+                        'In Solid Panel': gene_symbol in self.solid_panel_genes,
+                        'In Lung Panel': gene_symbol in self.lung_panel_genes
+                    })
+
+                self.cache[cache_key] = gene_info
+                return gene_info
+        except Exception as e:
+            print(f"UCSC API hatası: {str(e)}")
+        return None
+
     def get_variant_annotations(self, chrom, pos, ref, alt, gene_symbol=None):
         """Çeşitli veritabanlarından varyant bilgilerini çek"""
         cache_key = f"{chrom}:{pos}:{ref}>{alt}"
@@ -136,35 +185,35 @@ class MultiDBVariantAnnotator:
             return self.cache[cache_key]
 
         annotations = {
-            'clinvar': {},
-            'gnomad': {},
-            'myvariant': {},
-            'dbsnp': {}
+            'ClinVar': {},
+            'gnomAD': {},
+            'MyVariant': {},
+            'dbSNP': {}
         }
         
         try:
             # ClinVar sorgusu
             clinvar_info = self.get_clinvar_info(chrom, pos, ref, alt)
-            annotations['clinvar'] = clinvar_info
+            annotations['ClinVar'] = clinvar_info
 
             # MyVariant.info sorgusu
             hgvs = f"chr{chrom}:g.{pos}{ref}>{alt}"
             myvariant_response = requests.get(f"{self.api_sources['MyVariant']}{hgvs}")
             if myvariant_response.ok:
                 myvariant_data = myvariant_response.json()
-                annotations['myvariant'] = {
-                    'cadd_score': myvariant_data.get('cadd', {}).get('phred', ''),
-                    'sift_pred': myvariant_data.get('dbnsfp', {}).get('sift_pred', ''),
-                    'polyphen_pred': myvariant_data.get('dbnsfp', {}).get('polyphen2_hdiv_pred', '')
+                annotations['MyVariant'] = {
+                    'CADD Score': myvariant_data.get('cadd', {}).get('phred', ''),
+                    'SIFT Prediction': myvariant_data.get('dbnsfp', {}).get('sift_pred', ''),
+                    'PolyPhen Prediction': myvariant_data.get('dbnsfp', {}).get('polyphen2_hdiv_pred', '')
                 }
 
             # gnomAD sorgusu
             gnomad_response = requests.get(f"{self.api_sources['gnomAD']}{chrom}-{pos}-{ref}-{alt}")
             if gnomad_response.ok:
                 gnomad_data = gnomad_response.json()
-                annotations['gnomad'] = {
-                    'allele_freq': gnomad_data.get('af', {}).get('af', ''),
-                    'filter': gnomad_data.get('filters', [])
+                annotations['gnomAD'] = {
+                    'Allele Frequency': gnomad_data.get('af', {}).get('af', ''),
+                    'Filter': gnomad_data.get('filters', [])
                 }
 
         except Exception as e:
@@ -187,9 +236,9 @@ class MultiDBVariantAnnotator:
             
             # HGVS formatları
             hgvs_formats = [
-                f"NC_0000{chrom_num if int(chrom_num) > 9 else '0'+chrom_num}.10:g.{pos}{ref}>{alt}" if chrom_num.isdigit() else f"NC_0000{chrom}.10:g.{pos}{ref}>{alt}",  # GRCh37
-                f"chr{chrom}:g.{pos}{ref}>{alt}",  # Genomik
-                f"{chrom}:{pos}{ref}>{alt}"  # Basit format
+                f"NC_0000{chrom_num if int(chrom_num) > 9 else '0'+chrom_num}.10:g.{pos}{ref}>{alt}" if chrom_num.isdigit() else f"NC_0000{chrom}.10:g.{pos}{ref}>{alt}",
+                f"chr{chrom}:g.{pos}{ref}>{alt}",
+                f"{chrom}:{pos}{ref}>{alt}"
             ]
             
             for hgvs in hgvs_formats:
@@ -220,12 +269,12 @@ class MultiDBVariantAnnotator:
             print(f"ClinVar sorgu hatası: {str(e)}")
         
         return {
-            'found': False,
-            'clinvar_ids': [],
-            'significance': '',
-            'review_status': '',
-            'last_evaluated': '',
-            'submission_count': 0
+            'Found': False,
+            'ClinVar IDs': [],
+            'Clinical Significance': '',
+            'Review Status': '',
+            'Last Evaluated': '',
+            'Submission Count': 0
         }
 
     def _get_variant_details(self, clinvar_id):
@@ -250,112 +299,103 @@ class MultiDBVariantAnnotator:
                     significance = str(clinical_significance)
 
                 return {
-                    'found': True,
-                    'clinvar_ids': [clinvar_id],
-                    'significance': significance,
-                    'review_status': variant_info.get('review_status', ''),
-                    'last_evaluated': variant_info.get('last_evaluated', ''),
-                    'submission_count': variant_info.get('submission_count', 0)
+                    'Found': True,
+                    'ClinVar IDs': [clinvar_id],
+                    'Clinical Significance': significance,
+                    'Review Status': variant_info.get('review_status', ''),
+                    'Last Evaluated': variant_info.get('last_evaluated', ''),
+                    'Submission Count': variant_info.get('submission_count', 0)
                 }
         except Exception as e:
             print(f"Varyant detay hatası: {str(e)}")
         
         return {
-            'found': False,
-            'clinvar_ids': [],
-            'significance': '',
-            'review_status': '',
-            'last_evaluated': '',
-            'submission_count': 0
+            'Found': False,
+            'ClinVar IDs': [],
+            'Clinical Significance': '',
+            'Review Status': '',
+            'Last Evaluated': '',
+            'Submission Count': 0
         }
-
     def analyze_variant(self, chrom, pos, ref, alt, variant_id=None):
         """Geliştirilmiş varyant analizi"""
         gene_info = self.get_gene_info_from_ucsc(chrom, pos)
-        variant_annotations = self.get_variant_annotations(chrom, pos, ref, alt, gene_info.get('gene_symbol') if gene_info else None)
-        variant_type = self.get_variant_effect(ref, alt)
+        variant_annotations = self.get_variant_annotations(chrom, pos, ref, alt, gene_info.get('Gene Symbol') if gene_info else None)
+        
+        # Varyant tipini belirle
+        if len(ref) == len(alt):
+            variant_type = 'SNV' if len(ref) == 1 else 'MNV'
+        elif len(ref) > len(alt):
+            variant_type = 'Deletion'
+        else:
+            variant_type = 'Insertion'
 
         # Varyant etkisini belirle
-        effect = ''
-        protein_impact = ''
-        mutation_type = ''
-        
         if len(ref) != len(alt):  # indel
             if len(ref) > len(alt):
-                if (len(ref) - len(alt)) % 3 != 0:
-                    effect = 'frameshift_variant'
-                    protein_impact = 'Protein Yapısını Bozan'
-                    mutation_type = 'Loss of Function'
-                else:
-                    effect = 'inframe_deletion'
-                    protein_impact = 'Protein Modifikasyonu'
-                    mutation_type = 'Moderate Impact'
+                effect = 'frameshift_variant' if (len(ref) - len(alt)) % 3 != 0 else 'inframe_deletion'
+                protein_impact = 'Protein Yapısını Bozan' if (len(ref) - len(alt)) % 3 != 0 else 'Protein Modifikasyonu'
             else:
-                if (len(alt) - len(ref)) % 3 != 0:
-                    effect = 'frameshift_variant'
-                    protein_impact = 'Protein Yapısını Bozan'
-                    mutation_type = 'Loss of Function'
-                else:
-                    effect = 'inframe_insertion'
-                    protein_impact = 'Protein Modifikasyonu'
-                    mutation_type = 'Moderate Impact'
+                effect = 'frameshift_variant' if (len(alt) - len(ref)) % 3 != 0 else 'inframe_insertion'
+                protein_impact = 'Protein Yapısını Bozan' if (len(alt) - len(ref)) % 3 != 0 else 'Protein Modifikasyonu'
+            mutation_type = 'Loss of Function' if 'frameshift' in effect else 'Moderate Impact'
         else:  # SNV
             if ref in ['A', 'G'] and alt in ['A', 'G']:
                 effect = 'transition'
-                mutation_type = 'Substitution'
                 protein_impact = 'A>G Değişimi'
             elif ref in ['C', 'T'] and alt in ['C', 'T']:
                 effect = 'transition'
-                mutation_type = 'Substitution'
                 protein_impact = 'C>T Değişimi'
             else:
                 effect = 'transversion'
-                mutation_type = 'Substitution'
                 protein_impact = f'{ref}>{alt} Değişimi'
+            mutation_type = 'Substitution'
 
         # Protein fonksiyon tahmini
-        protein_function = 'Belirsiz'
         if effect == 'frameshift_variant':
             protein_function = 'Muhtemel Fonksiyon Kaybı'
-        elif effect == 'inframe_deletion':
-            protein_function = 'Kısmi Fonksiyon Değişimi'
-        elif effect == 'inframe_insertion':
+        elif effect in ['inframe_deletion', 'inframe_insertion']:
             protein_function = 'Kısmi Fonksiyon Değişimi'
         elif effect in ['transition', 'transversion']:
-            if gene_info and gene_info.get('is_cancer_gene'):
-                protein_function = 'Olası Fonksiyon Değişimi'
+            protein_function = 'Olası Fonksiyon Değişimi' if gene_info and gene_info.get('Is Cancer Gene') else 'Belirsiz'
+        else:
+            protein_function = 'Belirsiz'
 
-        # Gene info kontrolü
-        gene_symbol = gene_info.get('gene_symbol') if gene_info else ''
-        is_cancer_gene = gene_info.get('is_cancer_gene', False) if gene_info else False
-        transcript = gene_info.get('transcript', '') if gene_info else ''
+        # Klinik etki seviyesi
+        if effect == 'frameshift_variant':
+            clinical_impact = 'Yüksek'
+        elif effect in ['inframe_deletion', 'inframe_insertion']:
+            clinical_impact = 'Orta'
+        elif effect in ['transition', 'transversion']:
+            clinical_impact = 'Düşük'
+        else:
+            clinical_impact = 'Belirsiz'
 
         result = {
-            'chromosome': chrom,
-            'position': pos,
-            'reference': ref,
-            'alternate': alt,
-            'variant_type': variant_type,
-            'variant_effect': effect,
-            'mutation_type': mutation_type,
-            'protein_impact': protein_impact,
-            'protein_function': protein_function,
-            'gene_symbol': gene_symbol,
-            'is_cancer_gene': is_cancer_gene,
-            'transcript': transcript,
-            'in_clinvar': variant_annotations['clinvar']['found'],
-            'clinvar_significance': variant_annotations['clinvar']['significance'],
-            'clinvar_review_status': variant_annotations['clinvar']['review_status'],
-            'gnomad_freq': variant_annotations['gnomad'].get('allele_freq', ''),
-            'cadd_score': variant_annotations['myvariant'].get('cadd_score', ''),
-            'sift_pred': variant_annotations['myvariant'].get('sift_pred', ''),
-            'polyphen_pred': variant_annotations['myvariant'].get('polyphen_pred', ''),
-            'cancer_gene_description': self.cancer_genes.get(gene_symbol, ''),
-            'clinical_impact': 'Yüksek' if effect == 'frameshift_variant' else 
-                             'Orta' if effect in ['inframe_deletion', 'inframe_insertion'] else 
-                             'Düşük' if effect in ['transition', 'transversion'] else 'Belirsiz'
+            'Chromosome': chrom,
+            'Position': pos,
+            'Reference': ref,
+            'Alternate': alt,
+            'Variant Type': variant_type,
+            'Variant Effect': effect,
+            'Mutation Type': mutation_type,
+            'Protein Impact': protein_impact,
+            'Protein Function': protein_function,
+            'Clinical Impact': clinical_impact,
+            'Gene Symbol': gene_info.get('Gene Symbol', '') if gene_info else '',
+            'Is Cancer Gene': gene_info.get('Is Cancer Gene', False) if gene_info else False,
+            'Cancer Gene Description': self.cancer_genes.get(gene_info.get('Gene Symbol', ''), '') if gene_info else '',
+            'Transcript': gene_info.get('Transcript', '') if gene_info else '',
+            'In ClinVar': variant_annotations['ClinVar'].get('Found', False),
+            'ClinVar Significance': variant_annotations['ClinVar'].get('Clinical Significance', ''),
+            'ClinVar Review Status': variant_annotations['ClinVar'].get('Review Status', ''),
+            'gnomAD Frequency': variant_annotations['gnomAD'].get('Allele Frequency', ''),
+            'CADD Score': variant_annotations['MyVariant'].get('CADD Score', ''),
+            'SIFT Prediction': variant_annotations['MyVariant'].get('SIFT Prediction', ''),
+            'PolyPhen Prediction': variant_annotations['MyVariant'].get('PolyPhen Prediction', '')
         }
         return result
+
 class VCFAnalyzer(MultiDBVariantAnnotator):
     def __init__(self):
         super().__init__()
@@ -444,7 +484,7 @@ class VCFAnalyzer(MultiDBVariantAnnotator):
             completion_message = f"Toplam {len(df)} varyant analiz edildi."
             if panel_type != "all":
                 panel_genes = self.solid_panel_genes if panel_type == "solid" else self.lung_panel_genes
-                panel_variants = df[df['gene_symbol'].isin(panel_genes)]
+                panel_variants = df[df['Gene Symbol'].isin(panel_genes)]
                 completion_message += f"\nPanel genlerinde {len(panel_variants)} varyant bulundu."
             messagebox.showinfo("Analiz Tamamlandı", completion_message)
             
@@ -457,52 +497,26 @@ class VCFAnalyzer(MultiDBVariantAnnotator):
         try:
             output_file = f"{patient_id}_mutation_analysis.xlsx"
             with pd.ExcelWriter(output_file, engine='xlsxwriter') as writer:
-                # Sütun sıralaması
-                column_order = [
-                    'gene_symbol',
-                    'chromosome',
-                    'position',
-                    'reference',
-                    'alternate',
-                    'variant_type',
-                    'variant_effect',
-                    'mutation_type',
-                    'protein_impact',
-                    'protein_function',
-                    'clinical_impact',
-                    'is_cancer_gene',
-                    'cancer_gene_description',
-                    'in_clinvar',
-                    'clinvar_significance',
-                    'clinvar_review_status',
-                    'gnomad_freq',
-                    'cadd_score',
-                    'sift_pred',
-                    'polyphen_pred',
-                    'transcript'
-                ]
-                
                 # Tüm varyantlar
-                df_ordered = df[column_order]
-                df_ordered.to_excel(writer, sheet_name='All_Variants', index=False)
+                df.to_excel(writer, sheet_name='All_Variants', index=False)
                 
                 # Kanser genleri
-                cancer_variants = df[df['is_cancer_gene']].sort_values(
-                    by=['clinical_impact', 'gene_symbol'],
+                cancer_variants = df[df['Is Cancer Gene'] == True].sort_values(
+                    by=['Clinical Impact', 'Gene Symbol'],
                     ascending=[False, True]
-                )[column_order]
+                )
                 if not cancer_variants.empty:
                     cancer_variants.to_excel(writer, sheet_name='Cancer_Genes', index=False)
                 
                 # Panel-spesifik varyantlar
                 if panel_type != "all":
                     panel_genes = self.solid_panel_genes if panel_type == "solid" else self.lung_panel_genes
-                    panel_variants = df[df['gene_symbol'].isin(panel_genes)][column_order]
+                    panel_variants = df[df['Gene Symbol'].isin(panel_genes)]
                     if not panel_variants.empty:
                         panel_variants.to_excel(writer, sheet_name='Panel_Variants', index=False)
                 
                 # Yüksek etkili varyantlar
-                high_impact = df[df['clinical_impact'] == 'Yüksek'][column_order]
+                high_impact = df[df['Clinical Impact'] == 'Yüksek']
                 if not high_impact.empty:
                     high_impact.to_excel(writer, sheet_name='High_Impact_Variants', index=False)
                 
@@ -525,22 +539,22 @@ class VCFAnalyzer(MultiDBVariantAnnotator):
                     'Değer': [
                         len(df),
                         len(cancer_variants),
-                        df['in_clinvar'].sum(),
-                        len(df[df['variant_effect'] == 'frameshift_variant']),
-                        len(df[df['variant_type'] == 'SNV']),
-                        len(df[df['variant_type'] == 'Insertion']),
-                        len(df[df['variant_type'] == 'Deletion']),
-                        len(df[df['variant_effect'] == 'transition']),
-                        len(df[df['variant_effect'] == 'transversion']),
-                        len(df[df['clinical_impact'] == 'Yüksek']),
-                        len(df[df['clinical_impact'] == 'Orta']),
-                        len(df[df['clinical_impact'] == 'Düşük'])
+                        len(df[df['In ClinVar'] == True]),
+                        len(df[df['Variant Effect'] == 'frameshift_variant']),
+                        len(df[df['Variant Type'] == 'SNV']),
+                        len(df[df['Variant Type'] == 'Insertion']),
+                        len(df[df['Variant Type'] == 'Deletion']),
+                        len(df[df['Variant Effect'] == 'transition']),
+                        len(df[df['Variant Effect'] == 'transversion']),
+                        len(df[df['Clinical Impact'] == 'Yüksek']),
+                        len(df[df['Clinical Impact'] == 'Orta']),
+                        len(df[df['Clinical Impact'] == 'Düşük'])
                     ]
                 }
                 
                 if panel_type != "all":
                     panel_genes = self.solid_panel_genes if panel_type == "solid" else self.lung_panel_genes
-                    panel_variants = df[df['gene_symbol'].isin(panel_genes)]
+                    panel_variants = df[df['Gene Symbol'].isin(panel_genes)]
                     summary_data['Metrik'].extend([
                         'Panel Genleri Varyantları',
                         'Panel Genleri Oranı (%)'
@@ -559,6 +573,7 @@ class VCFAnalyzer(MultiDBVariantAnnotator):
                 
         except Exception as e:
             print(f"Excel raporu oluşturulurken hata oluştu: {str(e)}")
+            print("DataFrame sütunları:", df.columns.tolist())
             messagebox.showerror("Hata", f"Excel raporu oluşturulamadı: {str(e)}")
 
     def create_visualizations(self, df, patient_id, panel_type):
@@ -569,7 +584,7 @@ class VCFAnalyzer(MultiDBVariantAnnotator):
         
         # 1. Varyant tipi dağılımı
         plt.subplot(2, 3, 1)
-        sns.countplot(data=df, x='variant_type')
+        sns.countplot(data=df, x='Variant Type')
         plt.title('Varyant Tipi Dağılımı')
         plt.xticks(rotation=45)
         
@@ -577,31 +592,31 @@ class VCFAnalyzer(MultiDBVariantAnnotator):
         plt.subplot(2, 3, 2)
         if panel_type != "all":
             panel_genes = self.solid_panel_genes if panel_type == "solid" else self.lung_panel_genes
-            panel_df = df[df['gene_symbol'].isin(panel_genes)]
+            panel_df = df[df['Gene Symbol'].isin(panel_genes)]
             if not panel_df.empty:
-                sns.countplot(data=panel_df, y='gene_symbol', 
-                            order=panel_df['gene_symbol'].value_counts().index)
+                sns.countplot(data=panel_df, y='Gene Symbol', 
+                            order=panel_df['Gene Symbol'].value_counts().index)
                 plt.title(f'{panel_type.upper()} Panel Genleri Dağılımı')
         else:
-            cancer_df = df[df['is_cancer_gene']]
+            cancer_df = df[df['Is Cancer Gene'] == True]
             if not cancer_df.empty:
-                sns.countplot(data=cancer_df, y='gene_symbol',
-                            order=cancer_df['gene_symbol'].value_counts().head(15).index)
+                sns.countplot(data=cancer_df, y='Gene Symbol',
+                            order=cancer_df['Gene Symbol'].value_counts().head(15).index)
                 plt.title('En Sık Görülen Kanser Genleri (Top 15)')
         
         # 3. Varyant etki dağılımı
         plt.subplot(2, 3, 3)
-        sns.countplot(data=df, y='variant_effect')
+        sns.countplot(data=df, y='Variant Effect')
         plt.title('Varyant Etki Dağılımı')
         
         # 4. Klinik etki dağılımı
         plt.subplot(2, 3, 4)
-        sns.countplot(data=df, y='clinical_impact')
+        sns.countplot(data=df, y='Clinical Impact')
         plt.title('Klinik Etki Dağılımı')
         
         # 5. Protein etki dağılımı
         plt.subplot(2, 3, 5)
-        sns.countplot(data=df, y='protein_function')
+        sns.countplot(data=df, y='Protein Function')
         plt.title('Protein Fonksiyon Dağılımı')
         
         plt.tight_layout()
