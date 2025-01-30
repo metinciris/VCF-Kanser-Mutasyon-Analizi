@@ -149,27 +149,27 @@ class MultiDBVariantAnnotator:
             if response.ok:
                 data = response.json()
                 gene_info = {
-                    'Gene Symbol': None,
-                    'Transcript': None,
+                    'Gen': None,
+                    'Transkript': None,
                     'Strand': None,
-                    'Exon Count': None,
-                    'Is Cancer Gene': False,
-                    'Gene Type': None,
-                    'In Solid Panel': False,
-                    'In Lung Panel': False
+                    'Ekzon Sayısı': None,
+                    'Kanser Geni': False,
+                    'Gen Tipi': None,
+                    'Solid Panel': False,
+                    'Akciğer Panel': False
                 }
 
                 if 'refGene' in data and data['refGene']:
                     ref_gene = data['refGene'][0]
                     gene_symbol = ref_gene.get('name2')
                     gene_info.update({
-                        'Gene Symbol': gene_symbol,
-                        'Transcript': ref_gene.get('name'),
+                        'Gen': gene_symbol,
+                        'Transkript': ref_gene.get('name'),
                         'Strand': ref_gene.get('strand'),
-                        'Exon Count': ref_gene.get('exonCount'),
-                        'Is Cancer Gene': gene_symbol in self.cancer_genes,
-                        'In Solid Panel': gene_symbol in self.solid_panel_genes,
-                        'In Lung Panel': gene_symbol in self.lung_panel_genes
+                        'Ekzon Sayısı': ref_gene.get('exonCount'),
+                        'Kanser Geni': gene_symbol in self.cancer_genes,
+                        'Solid Panel': gene_symbol in self.solid_panel_genes,
+                        'Akciğer Panel': gene_symbol in self.lung_panel_genes
                     })
 
                 self.cache[cache_key] = gene_info
@@ -202,9 +202,9 @@ class MultiDBVariantAnnotator:
             if myvariant_response.ok:
                 myvariant_data = myvariant_response.json()
                 annotations['MyVariant'] = {
-                    'CADD Score': myvariant_data.get('cadd', {}).get('phred', ''),
-                    'SIFT Prediction': myvariant_data.get('dbnsfp', {}).get('sift_pred', ''),
-                    'PolyPhen Prediction': myvariant_data.get('dbnsfp', {}).get('polyphen2_hdiv_pred', '')
+                    'CADD Skoru': myvariant_data.get('cadd', {}).get('phred', ''),
+                    'SIFT Tahmini': myvariant_data.get('dbnsfp', {}).get('sift_pred', ''),
+                    'PolyPhen Tahmini': myvariant_data.get('dbnsfp', {}).get('polyphen2_hdiv_pred', '')
                 }
 
             # gnomAD sorgusu
@@ -212,8 +212,8 @@ class MultiDBVariantAnnotator:
             if gnomad_response.ok:
                 gnomad_data = gnomad_response.json()
                 annotations['gnomAD'] = {
-                    'Allele Frequency': gnomad_data.get('af', {}).get('af', ''),
-                    'Filter': gnomad_data.get('filters', [])
+                    'Allel Frekansı': gnomad_data.get('af', {}).get('af', ''),
+                    'Filtre': gnomad_data.get('filters', [])
                 }
 
         except Exception as e:
@@ -269,12 +269,12 @@ class MultiDBVariantAnnotator:
             print(f"ClinVar sorgu hatası: {str(e)}")
         
         return {
-            'Found': False,
-            'ClinVar IDs': [],
-            'Clinical Significance': '',
-            'Review Status': '',
-            'Last Evaluated': '',
-            'Submission Count': 0
+            'Bulundu': False,
+            'ClinVar ID': [],
+            'Klinik Önemi': '',
+            'İnceleme Durumu': '',
+            'Son Değerlendirme': '',
+            'Başvuru Sayısı': 0
         }
 
     def _get_variant_details(self, clinvar_id):
@@ -299,36 +299,36 @@ class MultiDBVariantAnnotator:
                     significance = str(clinical_significance)
 
                 return {
-                    'Found': True,
-                    'ClinVar IDs': [clinvar_id],
-                    'Clinical Significance': significance,
-                    'Review Status': variant_info.get('review_status', ''),
-                    'Last Evaluated': variant_info.get('last_evaluated', ''),
-                    'Submission Count': variant_info.get('submission_count', 0)
+                    'Bulundu': True,
+                    'ClinVar ID': [clinvar_id],
+                    'Klinik Önemi': significance,
+                    'İnceleme Durumu': variant_info.get('review_status', ''),
+                    'Son Değerlendirme': variant_info.get('last_evaluated', ''),
+                    'Başvuru Sayısı': variant_info.get('submission_count', 0)
                 }
         except Exception as e:
             print(f"Varyant detay hatası: {str(e)}")
         
         return {
-            'Found': False,
-            'ClinVar IDs': [],
-            'Clinical Significance': '',
-            'Review Status': '',
-            'Last Evaluated': '',
-            'Submission Count': 0
+            'Bulundu': False,
+            'ClinVar ID': [],
+            'Klinik Önemi': '',
+            'İnceleme Durumu': '',
+            'Son Değerlendirme': '',
+            'Başvuru Sayısı': 0
         }
     def analyze_variant(self, chrom, pos, ref, alt, variant_id=None):
         """Geliştirilmiş varyant analizi"""
         gene_info = self.get_gene_info_from_ucsc(chrom, pos)
-        variant_annotations = self.get_variant_annotations(chrom, pos, ref, alt, gene_info.get('Gene Symbol') if gene_info else None)
+        variant_annotations = self.get_variant_annotations(chrom, pos, ref, alt, gene_info.get('Gen') if gene_info else None)
         
         # Varyant tipini belirle
         if len(ref) == len(alt):
             variant_type = 'SNV' if len(ref) == 1 else 'MNV'
         elif len(ref) > len(alt):
-            variant_type = 'Deletion'
+            variant_type = 'Delesyon'
         else:
-            variant_type = 'Insertion'
+            variant_type = 'İnsersiyon'
 
         # Varyant etkisini belirle
         if len(ref) != len(alt):  # indel
@@ -338,7 +338,7 @@ class MultiDBVariantAnnotator:
             else:
                 effect = 'frameshift_variant' if (len(alt) - len(ref)) % 3 != 0 else 'inframe_insertion'
                 protein_impact = 'Protein Yapısını Bozan' if (len(alt) - len(ref)) % 3 != 0 else 'Protein Modifikasyonu'
-            mutation_type = 'Loss of Function' if 'frameshift' in effect else 'Moderate Impact'
+            mutation_type = 'Fonksiyon Kaybı' if 'frameshift' in effect else 'Orta Etki'
         else:  # SNV
             if ref in ['A', 'G'] and alt in ['A', 'G']:
                 effect = 'transition'
@@ -349,7 +349,7 @@ class MultiDBVariantAnnotator:
             else:
                 effect = 'transversion'
                 protein_impact = f'{ref}>{alt} Değişimi'
-            mutation_type = 'Substitution'
+            mutation_type = 'Değişim'
 
         # Protein fonksiyon tahmini
         if effect == 'frameshift_variant':
@@ -357,7 +357,7 @@ class MultiDBVariantAnnotator:
         elif effect in ['inframe_deletion', 'inframe_insertion']:
             protein_function = 'Kısmi Fonksiyon Değişimi'
         elif effect in ['transition', 'transversion']:
-            protein_function = 'Olası Fonksiyon Değişimi' if gene_info and gene_info.get('Is Cancer Gene') else 'Belirsiz'
+            protein_function = 'Olası Fonksiyon Değişimi' if gene_info and gene_info.get('Kanser Geni') else 'Belirsiz'
         else:
             protein_function = 'Belirsiz'
 
@@ -372,27 +372,27 @@ class MultiDBVariantAnnotator:
             clinical_impact = 'Belirsiz'
 
         result = {
-            'Chromosome': chrom,
-            'Position': pos,
-            'Reference': ref,
-            'Alternate': alt,
-            'Variant Type': variant_type,
-            'Variant Effect': effect,
-            'Mutation Type': mutation_type,
-            'Protein Impact': protein_impact,
-            'Protein Function': protein_function,
-            'Clinical Impact': clinical_impact,
-            'Gene Symbol': gene_info.get('Gene Symbol', '') if gene_info else '',
-            'Is Cancer Gene': gene_info.get('Is Cancer Gene', False) if gene_info else False,
-            'Cancer Gene Description': self.cancer_genes.get(gene_info.get('Gene Symbol', ''), '') if gene_info else '',
-            'Transcript': gene_info.get('Transcript', '') if gene_info else '',
-            'In ClinVar': variant_annotations['ClinVar'].get('Found', False),
-            'ClinVar Significance': variant_annotations['ClinVar'].get('Clinical Significance', ''),
-            'ClinVar Review Status': variant_annotations['ClinVar'].get('Review Status', ''),
-            'gnomAD Frequency': variant_annotations['gnomAD'].get('Allele Frequency', ''),
-            'CADD Score': variant_annotations['MyVariant'].get('CADD Score', ''),
-            'SIFT Prediction': variant_annotations['MyVariant'].get('SIFT Prediction', ''),
-            'PolyPhen Prediction': variant_annotations['MyVariant'].get('PolyPhen Prediction', '')
+            'Kromozom': chrom,
+            'Pozisyon': pos,
+            'Referans': ref,
+            'Alternatif': alt,
+            'Varyant Tipi': variant_type,
+            'Varyant Etkisi': effect,
+            'Mutasyon Tipi': mutation_type,
+            'Protein Etkisi': protein_impact,
+            'Protein Fonksiyonu': protein_function,
+            'Klinik Etki': clinical_impact,
+            'Gen': gene_info.get('Gen', '-'),
+            'Kanser Geni': '+' if gene_info.get('Kanser Geni', False) else '-',
+            'Kanser Tipi': self.cancer_genes.get(gene_info.get('Gen', ''), '-'),
+            'Transkript': gene_info.get('Transkript', '-'),
+            'ClinVar': '+' if variant_annotations['ClinVar'].get('Bulundu', False) else '-',
+            'ClinVar Önemi': variant_annotations['ClinVar'].get('Klinik Önemi', '-'),
+            'ClinVar Durumu': variant_annotations['ClinVar'].get('İnceleme Durumu', '-'),
+            'gnomAD Frekans': variant_annotations['gnomAD'].get('Allel Frekansı', '-'),
+            'CADD Skoru': variant_annotations['MyVariant'].get('CADD Skoru', '-'),
+            'SIFT': variant_annotations['MyVariant'].get('SIFT Tahmini', '-'),
+            'PolyPhen': variant_annotations['MyVariant'].get('PolyPhen Tahmini', '-')
         }
         return result
 
@@ -484,7 +484,7 @@ class VCFAnalyzer(MultiDBVariantAnnotator):
             completion_message = f"Toplam {len(df)} varyant analiz edildi."
             if panel_type != "all":
                 panel_genes = self.solid_panel_genes if panel_type == "solid" else self.lung_panel_genes
-                panel_variants = df[df['Gene Symbol'].isin(panel_genes)]
+                panel_variants = df[df['Gen'].isin(panel_genes)]
                 completion_message += f"\nPanel genlerinde {len(panel_variants)} varyant bulundu."
             messagebox.showinfo("Analiz Tamamlandı", completion_message)
             
@@ -495,76 +495,98 @@ class VCFAnalyzer(MultiDBVariantAnnotator):
     def save_excel_report(self, df, patient_id, panel_type):
         """Geliştirilmiş Excel raporu"""
         try:
-            output_file = f"{patient_id}_mutation_analysis.xlsx"
+            output_file = f"{patient_id}_varyant_analizi.xlsx"
+            
+            # Boş değerleri '-' ile değiştir
+            df = df.fillna('-')
+            
             with pd.ExcelWriter(output_file, engine='xlsxwriter') as writer:
+                # Excel formatları
+                workbook = writer.book
+                header_format = workbook.add_format({
+                    'bold': True,
+                    'bg_color': '#D7E4BC',
+                    'border': 1
+                })
+                
                 # Tüm varyantlar
-                df.to_excel(writer, sheet_name='All_Variants', index=False)
+                df.to_excel(writer, sheet_name='Tüm Varyantlar', index=False)
                 
                 # Kanser genleri
-                cancer_variants = df[df['Is Cancer Gene'] == True].sort_values(
-                    by=['Clinical Impact', 'Gene Symbol'],
+                cancer_variants = df[df['Kanser Geni'] == '+'].sort_values(
+                    by=['Klinik Etki', 'Gen'],
                     ascending=[False, True]
                 )
                 if not cancer_variants.empty:
-                    cancer_variants.to_excel(writer, sheet_name='Cancer_Genes', index=False)
+                    cancer_variants.to_excel(writer, sheet_name='Kanser Genleri', index=False)
                 
                 # Panel-spesifik varyantlar
                 if panel_type != "all":
                     panel_genes = self.solid_panel_genes if panel_type == "solid" else self.lung_panel_genes
-                    panel_variants = df[df['Gene Symbol'].isin(panel_genes)]
+                    panel_variants = df[df['Gen'].isin(panel_genes)]
                     if not panel_variants.empty:
-                        panel_variants.to_excel(writer, sheet_name='Panel_Variants', index=False)
+                        panel_variants.to_excel(writer, sheet_name='Panel Varyantları', index=False)
                 
                 # Yüksek etkili varyantlar
-                high_impact = df[df['Clinical Impact'] == 'Yüksek']
+                high_impact = df[df['Klinik Etki'] == 'Yüksek']
                 if not high_impact.empty:
-                    high_impact.to_excel(writer, sheet_name='High_Impact_Variants', index=False)
+                    high_impact.to_excel(writer, sheet_name='Yüksek Etkili', index=False)
                 
                 # Özet istatistikler
                 summary_data = {
                     'Metrik': [
-                        'Toplam Varyant Sayısı',
-                        'Kanser Geni Varyantları',
-                        'ClinVar Varyantları',
-                        'Frameshift Varyant Sayısı',
-                        'SNV Sayısı',
-                        'İnsersiyon Sayısı',
-                        'Delesyon Sayısı',
-                        'Transition Sayısı',
-                        'Transversion Sayısı',
-                        'Yüksek Etkili Varyant Sayısı',
-                        'Orta Etkili Varyant Sayısı',
-                        'Düşük Etkili Varyant Sayısı'
+                        'Toplam Varyant',
+                        'Kanser Geni (+)',
+                        'ClinVar (+)',
+                        'Frameshift',
+                        'SNV',
+                        'İnsersiyon',
+                        'Delesyon',
+                        'Transition',
+                        'Transversion',
+                        'Yüksek Etki',
+                        'Orta Etki',
+                        'Düşük Etki'
                     ],
                     'Değer': [
                         len(df),
-                        len(cancer_variants),
-                        len(df[df['In ClinVar'] == True]),
-                        len(df[df['Variant Effect'] == 'frameshift_variant']),
-                        len(df[df['Variant Type'] == 'SNV']),
-                        len(df[df['Variant Type'] == 'Insertion']),
-                        len(df[df['Variant Type'] == 'Deletion']),
-                        len(df[df['Variant Effect'] == 'transition']),
-                        len(df[df['Variant Effect'] == 'transversion']),
-                        len(df[df['Clinical Impact'] == 'Yüksek']),
-                        len(df[df['Clinical Impact'] == 'Orta']),
-                        len(df[df['Clinical Impact'] == 'Düşük'])
+                        len(df[df['Kanser Geni'] == '+']),
+                        len(df[df['ClinVar'] == '+']),
+                        len(df[df['Varyant Etkisi'] == 'frameshift_variant']),
+                        len(df[df['Varyant Tipi'] == 'SNV']),
+                        len(df[df['Varyant Tipi'] == 'İnsersiyon']),
+                        len(df[df['Varyant Tipi'] == 'Delesyon']),
+                        len(df[df['Varyant Etkisi'] == 'transition']),
+                        len(df[df['Varyant Etkisi'] == 'transversion']),
+                        len(df[df['Klinik Etki'] == 'Yüksek']),
+                        len(df[df['Klinik Etki'] == 'Orta']),
+                        len(df[df['Klinik Etki'] == 'Düşük'])
                     ]
                 }
                 
                 if panel_type != "all":
                     panel_genes = self.solid_panel_genes if panel_type == "solid" else self.lung_panel_genes
-                    panel_variants = df[df['Gene Symbol'].isin(panel_genes)]
+                    panel_variants = df[df['Gen'].isin(panel_genes)]
                     summary_data['Metrik'].extend([
-                        'Panel Genleri Varyantları',
-                        'Panel Genleri Oranı (%)'
+                        'Panel Genleri',
+                        'Panel Oranı (%)'
                     ])
                     summary_data['Değer'].extend([
                         len(panel_variants),
                         round(len(panel_variants) / len(df) * 100, 2)
                     ])
                 
-                pd.DataFrame(summary_data).to_excel(writer, sheet_name='Summary', index=False)
+                pd.DataFrame(summary_data).to_excel(writer, sheet_name='Özet', index=False)
+                
+                # Her sayfa için sütun genişliklerini ayarla
+                for sheet_name in writer.sheets:
+                    worksheet = writer.sheets[sheet_name]
+                    for idx, col in enumerate(df.columns):
+                        max_length = max(
+                            df[col].astype(str).apply(len).max(),
+                            len(col)
+                        ) + 2
+                        worksheet.set_column(idx, idx, min(max_length, 30))
             
             print(f"Excel raporu başarıyla kaydedildi: {output_file}")
             # Excel dosyasını otomatik aç
@@ -584,7 +606,7 @@ class VCFAnalyzer(MultiDBVariantAnnotator):
         
         # 1. Varyant tipi dağılımı
         plt.subplot(2, 3, 1)
-        sns.countplot(data=df, x='Variant Type')
+        sns.countplot(data=df, x='Varyant Tipi')
         plt.title('Varyant Tipi Dağılımı')
         plt.xticks(rotation=45)
         
@@ -592,35 +614,35 @@ class VCFAnalyzer(MultiDBVariantAnnotator):
         plt.subplot(2, 3, 2)
         if panel_type != "all":
             panel_genes = self.solid_panel_genes if panel_type == "solid" else self.lung_panel_genes
-            panel_df = df[df['Gene Symbol'].isin(panel_genes)]
+            panel_df = df[df['Gen'].isin(panel_genes)]
             if not panel_df.empty:
-                sns.countplot(data=panel_df, y='Gene Symbol', 
-                            order=panel_df['Gene Symbol'].value_counts().index)
+                sns.countplot(data=panel_df, y='Gen', 
+                            order=panel_df['Gen'].value_counts().index)
                 plt.title(f'{panel_type.upper()} Panel Genleri Dağılımı')
         else:
-            cancer_df = df[df['Is Cancer Gene'] == True]
+            cancer_df = df[df['Kanser Geni'] == '+']
             if not cancer_df.empty:
-                sns.countplot(data=cancer_df, y='Gene Symbol',
-                            order=cancer_df['Gene Symbol'].value_counts().head(15).index)
+                sns.countplot(data=cancer_df, y='Gen',
+                            order=cancer_df['Gen'].value_counts().head(15).index)
                 plt.title('En Sık Görülen Kanser Genleri (Top 15)')
         
         # 3. Varyant etki dağılımı
         plt.subplot(2, 3, 3)
-        sns.countplot(data=df, y='Variant Effect')
+        sns.countplot(data=df, y='Varyant Etkisi')
         plt.title('Varyant Etki Dağılımı')
         
         # 4. Klinik etki dağılımı
         plt.subplot(2, 3, 4)
-        sns.countplot(data=df, y='Clinical Impact')
+        sns.countplot(data=df, y='Klinik Etki')
         plt.title('Klinik Etki Dağılımı')
         
         # 5. Protein etki dağılımı
         plt.subplot(2, 3, 5)
-        sns.countplot(data=df, y='Protein Function')
+        sns.countplot(data=df, y='Protein Fonksiyonu')
         plt.title('Protein Fonksiyon Dağılımı')
         
         plt.tight_layout()
-        plt.savefig(f'{patient_id}_analysis_plots.png', dpi=300, bbox_inches='tight')
+        plt.savefig(f'{patient_id}_analiz_grafikleri.png', dpi=300, bbox_inches='tight')
         plt.close()
 
     def read_vcf(self, vcf_file):
