@@ -10,9 +10,17 @@ import re
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-class VariantAnnotator:
+class MultiDBVariantAnnotator:
     def __init__(self):
         self.cache = {}
+        # API kaynakları
+        self.api_sources = {
+            "ClinVar": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+            "gnomAD": "https://gnomad.broadinstitute.org/api/variant/",
+            "MyVariant": "https://myvariant.info/v1/variant/",
+            "dbSNP": "https://api.ncbi.nlm.nih.gov/variation/v0/beta/refsnp/"
+        }
+        
         # SDÜ Solid Tümör ve Lung Paneli genleri
         self.cancer_genes = {
             'AKT1': 'PI3K/AKT Yolağı',
@@ -121,54 +129,49 @@ class VariantAnnotator:
             'LOW': ['synonymous', 'splice_region', 'intronic', 'upstream', 'downstream'],
             'MODIFIER': ['intergenic', 'non_coding_transcript', 'regulatory_region']
         }
-    def get_gene_info_from_ucsc(self, chrom, pos):
-        """UCSC API'den geliştirilmiş gen bilgisi"""
-        cache_key = f"ucsc_{chrom}:{pos}"
+    def get_variant_annotations(self, chrom, pos, ref, alt, gene_symbol=None):
+        """Çeşitli veritabanlarından varyant bilgilerini çek"""
+        cache_key = f"{chrom}:{pos}:{ref}>{alt}"
         if cache_key in self.cache:
             return self.cache[cache_key]
 
-        url = f"https://api.genome.ucsc.edu/getData/track?"
-        params = {
-            'genome': 'hg19',
-            'track': 'refGene,knownGene,ensGene',
-            'chrom': f'chr{chrom}',
-            'start': int(pos)-1,
-            'end': pos
+        annotations = {
+            'clinvar': {},
+            'gnomad': {},
+            'myvariant': {},
+            'dbsnp': {}
         }
-
+        
         try:
-            response = requests.get(url, params=params, timeout=10)
-            if response.ok:
-                data = response.json()
-                gene_info = {
-                    'gene_symbol': None,
-                    'transcript': None,
-                    'strand': None,
-                    'exon_count': None,
-                    'is_cancer_gene': False,
-                    'gene_type': None,
-                    'in_solid_panel': False,
-                    'in_lung_panel': False
+            # ClinVar sorgusu
+            clinvar_info = self.get_clinvar_info(chrom, pos, ref, alt)
+            annotations['clinvar'] = clinvar_info
+
+            # MyVariant.info sorgusu
+            hgvs = f"chr{chrom}:g.{pos}{ref}>{alt}"
+            myvariant_response = requests.get(f"{self.api_sources['MyVariant']}{hgvs}")
+            if myvariant_response.ok:
+                myvariant_data = myvariant_response.json()
+                annotations['myvariant'] = {
+                    'cadd_score': myvariant_data.get('cadd', {}).get('phred', ''),
+                    'sift_pred': myvariant_data.get('dbnsfp', {}).get('sift_pred', ''),
+                    'polyphen_pred': myvariant_data.get('dbnsfp', {}).get('polyphen2_hdiv_pred', '')
                 }
 
-                if 'refGene' in data and data['refGene']:
-                    ref_gene = data['refGene'][0]
-                    gene_symbol = ref_gene.get('name2')
-                    gene_info.update({
-                        'gene_symbol': gene_symbol,
-                        'transcript': ref_gene.get('name'),
-                        'strand': ref_gene.get('strand'),
-                        'exon_count': ref_gene.get('exonCount'),
-                        'is_cancer_gene': gene_symbol in self.cancer_genes,
-                        'in_solid_panel': gene_symbol in self.solid_panel_genes,
-                        'in_lung_panel': gene_symbol in self.lung_panel_genes
-                    })
+            # gnomAD sorgusu
+            gnomad_response = requests.get(f"{self.api_sources['gnomAD']}{chrom}-{pos}-{ref}-{alt}")
+            if gnomad_response.ok:
+                gnomad_data = gnomad_response.json()
+                annotations['gnomad'] = {
+                    'allele_freq': gnomad_data.get('af', {}).get('af', ''),
+                    'filter': gnomad_data.get('filters', [])
+                }
 
-                self.cache[cache_key] = gene_info
-                return gene_info
         except Exception as e:
-            print(f"UCSC API hatası: {str(e)}")
-        return None
+            print(f"Varyant anotasyon hatası: {str(e)}")
+
+        self.cache[cache_key] = annotations
+        return annotations
 
     def get_clinvar_info(self, chrom, pos, ref, alt, variant_id=None):
         """Geliştirilmiş ClinVar bilgisi"""
@@ -195,7 +198,7 @@ class VariantAnnotator:
                     'term': f'"{hgvs}"[Variant Name]',
                     'retmode': 'json'
                 }
-                response = requests.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi", params=params)
+                response = requests.get(self.api_sources['ClinVar'], params=params)
                 if response.ok:
                     data = response.json()
                     if int(data['esearchresult'].get('count', 0)) > 0:
@@ -207,7 +210,7 @@ class VariantAnnotator:
                 'term': f"{chrom}[Chr] AND {pos}[Base Position] AND {ref}[Reference allele] AND {alt}[Alternate allele]",
                 'retmode': 'json'
             }
-            response = requests.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi", params=params)
+            response = requests.get(self.api_sources['ClinVar'], params=params)
             if response.ok:
                 data = response.json()
                 if int(data['esearchresult'].get('count', 0)) > 0:
@@ -266,22 +269,10 @@ class VariantAnnotator:
             'submission_count': 0
         }
 
-    def get_variant_effect(self, ref, alt):
-        """Varyant tipini ve etkisini belirle"""
-        if len(ref) == len(alt):
-            if len(ref) == 1:
-                return 'SNV'
-            else:
-                return 'MNV'
-        elif len(ref) > len(alt):
-            return 'Deletion'
-        else:
-            return 'Insertion'
-
     def analyze_variant(self, chrom, pos, ref, alt, variant_id=None):
         """Geliştirilmiş varyant analizi"""
         gene_info = self.get_gene_info_from_ucsc(chrom, pos)
-        clinvar_info = self.get_clinvar_info(chrom, pos, ref, alt, variant_id)
+        variant_annotations = self.get_variant_annotations(chrom, pos, ref, alt, gene_info.get('gene_symbol') if gene_info else None)
         variant_type = self.get_variant_effect(ref, alt)
 
         # Varyant etkisini belirle
@@ -312,17 +303,11 @@ class VariantAnnotator:
             if ref in ['A', 'G'] and alt in ['A', 'G']:
                 effect = 'transition'
                 mutation_type = 'Substitution'
-                if ref == 'A' and alt == 'G':
-                    protein_impact = 'A>G Değişimi'
-                else:
-                    protein_impact = 'G>A Değişimi'
+                protein_impact = 'A>G Değişimi'
             elif ref in ['C', 'T'] and alt in ['C', 'T']:
                 effect = 'transition'
                 mutation_type = 'Substitution'
-                if ref == 'C' and alt == 'T':
-                    protein_impact = 'C>T Değişimi'
-                else:
-                    protein_impact = 'T>C Değişimi'
+                protein_impact = 'C>T Değişimi'
             else:
                 effect = 'transversion'
                 mutation_type = 'Substitution'
@@ -358,18 +343,20 @@ class VariantAnnotator:
             'gene_symbol': gene_symbol,
             'is_cancer_gene': is_cancer_gene,
             'transcript': transcript,
-            'in_clinvar': clinvar_info['found'],
-            'clinvar_significance': clinvar_info['significance'],
-            'clinvar_review_status': clinvar_info['review_status'],
-            'clinvar_last_evaluated': clinvar_info['last_evaluated'],
-            'clinvar_submission_count': clinvar_info['submission_count'],
+            'in_clinvar': variant_annotations['clinvar']['found'],
+            'clinvar_significance': variant_annotations['clinvar']['significance'],
+            'clinvar_review_status': variant_annotations['clinvar']['review_status'],
+            'gnomad_freq': variant_annotations['gnomad'].get('allele_freq', ''),
+            'cadd_score': variant_annotations['myvariant'].get('cadd_score', ''),
+            'sift_pred': variant_annotations['myvariant'].get('sift_pred', ''),
+            'polyphen_pred': variant_annotations['myvariant'].get('polyphen_pred', ''),
             'cancer_gene_description': self.cancer_genes.get(gene_symbol, ''),
             'clinical_impact': 'Yüksek' if effect == 'frameshift_variant' else 
                              'Orta' if effect in ['inframe_deletion', 'inframe_insertion'] else 
                              'Düşük' if effect in ['transition', 'transversion'] else 'Belirsiz'
         }
         return result
-class VCFAnalyzer(VariantAnnotator):
+class VCFAnalyzer(MultiDBVariantAnnotator):
     def __init__(self):
         super().__init__()
         self.root = tk.Tk()
@@ -449,14 +436,7 @@ class VCFAnalyzer(VariantAnnotator):
                     print(f"Varyant analiz hatası: {str(e)}")
 
             df = pd.DataFrame(results)
-            
-            # Panel raporu sadece panel seçiliyse oluşturulur
-            if panel_type != "all":
-                panel_report = self.create_panel_specific_report(df, panel_type)
-                self.save_excel_report(df, patient_id, panel_type, panel_report)
-            else:
-                self.save_excel_report(df, patient_id, "all", None)
-            
+            self.save_excel_report(df, patient_id, panel_type)
             self.create_visualizations(df, patient_id, panel_type)
             
             self.update_status(f"Analiz tamamlandı!", 100)
@@ -472,7 +452,7 @@ class VCFAnalyzer(VariantAnnotator):
             self.update_status(f"Hata: {str(e)}")
             messagebox.showerror("Hata", str(e))
 
-    def save_excel_report(self, df, patient_id, panel_type, panel_report=None):
+    def save_excel_report(self, df, patient_id, panel_type):
         """Geliştirilmiş Excel raporu"""
         try:
             output_file = f"{patient_id}_mutation_analysis.xlsx"
@@ -495,6 +475,10 @@ class VCFAnalyzer(VariantAnnotator):
                     'in_clinvar',
                     'clinvar_significance',
                     'clinvar_review_status',
+                    'gnomad_freq',
+                    'cadd_score',
+                    'sift_pred',
+                    'polyphen_pred',
                     'transcript'
                 ]
                 
@@ -659,67 +643,3 @@ class VCFAnalyzer(VariantAnnotator):
 if __name__ == "__main__":
     analyzer = VCFAnalyzer()
     analyzer.run()
-def create_panel_specific_report(self, df, panel_type="solid"):
-    """Panel tipine özel rapor oluştur"""
-    panel_genes = self.solid_panel_genes if panel_type == "solid" else self.lung_panel_genes
-    panel_variants = df[df['gene_symbol'].isin(panel_genes)]
-    
-    report = {
-        'Panel Tipi': panel_type.upper(),
-        'Analiz Edilen Panel Genleri': len(panel_genes),
-        'Bulunan Panel Varyantları': len(panel_variants),
-        'Gen Bazlı Bulgular': {},
-        'Yolak Analizi': {}
-    }
-    
-    # Gen bazlı analiz
-    for gene in panel_genes:
-        gene_variants = panel_variants[panel_variants['gene_symbol'] == gene]
-        if not gene_variants.empty:
-            report['Gen Bazlı Bulgular'][gene] = {
-                'Varyant Sayısı': len(gene_variants),
-                'Varyant Tipleri': gene_variants['variant_effect'].unique().tolist(),
-                'Protein Etkileri': gene_variants['protein_impact'].unique().tolist(),
-                'Klinik Etkiler': gene_variants['clinical_impact'].unique().tolist(),
-                'Yolak': self.cancer_genes.get(gene, 'Bilinmiyor')
-            }
-    
-    # Yolak analizi
-    pathway_variants = {}
-    for _, variant in panel_variants.iterrows():
-        gene = variant['gene_symbol']
-        pathway = self.cancer_genes.get(gene, 'Diğer')
-        if pathway not in pathway_variants:
-            pathway_variants[pathway] = {
-                'Varyant Sayısı': 0,
-                'Genler': set(),
-                'Yüksek Etkili': 0,
-                'Orta Etkili': 0,
-                'Düşük Etkili': 0
-            }
-        pathway_variants[pathway]['Varyant Sayısı'] += 1
-        pathway_variants[pathway]['Genler'].add(gene)
-        if variant['clinical_impact'] == 'Yüksek':
-            pathway_variants[pathway]['Yüksek Etkili'] += 1
-        elif variant['clinical_impact'] == 'Orta':
-            pathway_variants[pathway]['Orta Etkili'] += 1
-        elif variant['clinical_impact'] == 'Düşük':
-            pathway_variants[pathway]['Düşük Etkili'] += 1
-    
-    # Genleri listeye çevir
-    for pathway in pathway_variants:
-        pathway_variants[pathway]['Genler'] = list(pathway_variants[pathway]['Genler'])
-    
-    report['Yolak Analizi'] = pathway_variants
-    
-    # Özet istatistikler ekle
-    report['Özet İstatistikler'] = {
-        'Yüksek Etkili Varyant Sayısı': len(panel_variants[panel_variants['clinical_impact'] == 'Yüksek']),
-        'Orta Etkili Varyant Sayısı': len(panel_variants[panel_variants['clinical_impact'] == 'Orta']),
-        'Düşük Etkili Varyant Sayısı': len(panel_variants[panel_variants['clinical_impact'] == 'Düşük']),
-        'Frameshift Varyant Sayısı': len(panel_variants[panel_variants['variant_effect'] == 'frameshift_variant']),
-        'Protein Modifikasyonu': len(panel_variants[panel_variants['protein_impact'] == 'Protein Modifikasyonu']),
-        'ClinVar Varyantları': panel_variants['in_clinvar'].sum()
-    }
-    
-    return report
