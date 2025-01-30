@@ -266,41 +266,6 @@ class VariantAnnotator:
             'submission_count': 0
         }
 
-    def create_panel_specific_report(self, df, panel_type="solid"):
-        """Panel tipine özel rapor oluştur"""
-        panel_genes = self.solid_panel_genes if panel_type == "solid" else self.lung_panel_genes
-        panel_variants = df[df['gene_symbol'].isin(panel_genes)]
-        
-        report = {
-            'Panel Tipi': panel_type.upper(),
-            'Analiz Edilen Panel Genleri': len(panel_genes),
-            'Bulunan Panel Varyantları': len(panel_variants),
-            'Gen Bazlı Bulgular': {},
-            'Yolak Analizi': {}
-        }
-        
-        # Gen bazlı analiz
-        for gene in panel_genes:
-            gene_variants = panel_variants[panel_variants['gene_symbol'] == gene]
-            if not gene_variants.empty:
-                report['Gen Bazlı Bulgular'][gene] = {
-                    'Varyant Sayısı': len(gene_variants),
-                    'Varyant Tipleri': gene_variants['variant_effect'].unique().tolist(),
-                    'Yolak': self.cancer_genes.get(gene, 'Bilinmiyor')
-                }
-        
-        # Yolak analizi
-        pathway_variants = {}
-        for _, variant in panel_variants.iterrows():
-            gene = variant['gene_symbol']
-            pathway = self.cancer_genes.get(gene, 'Diğer')
-            if pathway not in pathway_variants:
-                pathway_variants[pathway] = 0
-            pathway_variants[pathway] += 1
-        
-        report['Yolak Analizi'] = pathway_variants
-        
-        return report
     def get_variant_effect(self, ref, alt):
         """Varyant tipini ve etkisini belirle"""
         if len(ref) == len(alt):
@@ -321,18 +286,59 @@ class VariantAnnotator:
 
         # Varyant etkisini belirle
         effect = ''
+        protein_impact = ''
+        mutation_type = ''
+        
         if len(ref) != len(alt):  # indel
             if len(ref) > len(alt):
-                effect = 'frameshift_variant' if (len(ref) - len(alt)) % 3 != 0 else 'inframe_deletion'
+                if (len(ref) - len(alt)) % 3 != 0:
+                    effect = 'frameshift_variant'
+                    protein_impact = 'Protein Yapısını Bozan'
+                    mutation_type = 'Loss of Function'
+                else:
+                    effect = 'inframe_deletion'
+                    protein_impact = 'Protein Modifikasyonu'
+                    mutation_type = 'Moderate Impact'
             else:
-                effect = 'frameshift_variant' if (len(alt) - len(ref)) % 3 != 0 else 'inframe_insertion'
+                if (len(alt) - len(ref)) % 3 != 0:
+                    effect = 'frameshift_variant'
+                    protein_impact = 'Protein Yapısını Bozan'
+                    mutation_type = 'Loss of Function'
+                else:
+                    effect = 'inframe_insertion'
+                    protein_impact = 'Protein Modifikasyonu'
+                    mutation_type = 'Moderate Impact'
         else:  # SNV
-            if ref in ['A', 'G'] and alt in ['A', 'G']:  # transition
+            if ref in ['A', 'G'] and alt in ['A', 'G']:
                 effect = 'transition'
-            elif ref in ['C', 'T'] and alt in ['C', 'T']:  # transition
+                mutation_type = 'Substitution'
+                if ref == 'A' and alt == 'G':
+                    protein_impact = 'A>G Değişimi'
+                else:
+                    protein_impact = 'G>A Değişimi'
+            elif ref in ['C', 'T'] and alt in ['C', 'T']:
                 effect = 'transition'
-            else:  # transversion
+                mutation_type = 'Substitution'
+                if ref == 'C' and alt == 'T':
+                    protein_impact = 'C>T Değişimi'
+                else:
+                    protein_impact = 'T>C Değişimi'
+            else:
                 effect = 'transversion'
+                mutation_type = 'Substitution'
+                protein_impact = f'{ref}>{alt} Değişimi'
+
+        # Protein fonksiyon tahmini
+        protein_function = 'Belirsiz'
+        if effect == 'frameshift_variant':
+            protein_function = 'Muhtemel Fonksiyon Kaybı'
+        elif effect == 'inframe_deletion':
+            protein_function = 'Kısmi Fonksiyon Değişimi'
+        elif effect == 'inframe_insertion':
+            protein_function = 'Kısmi Fonksiyon Değişimi'
+        elif effect in ['transition', 'transversion']:
+            if gene_info and gene_info.get('is_cancer_gene'):
+                protein_function = 'Olası Fonksiyon Değişimi'
 
         # Gene info kontrolü
         gene_symbol = gene_info.get('gene_symbol') if gene_info else ''
@@ -346,6 +352,9 @@ class VariantAnnotator:
             'alternate': alt,
             'variant_type': variant_type,
             'variant_effect': effect,
+            'mutation_type': mutation_type,
+            'protein_impact': protein_impact,
+            'protein_function': protein_function,
             'gene_symbol': gene_symbol,
             'is_cancer_gene': is_cancer_gene,
             'transcript': transcript,
@@ -354,10 +363,12 @@ class VariantAnnotator:
             'clinvar_review_status': clinvar_info['review_status'],
             'clinvar_last_evaluated': clinvar_info['last_evaluated'],
             'clinvar_submission_count': clinvar_info['submission_count'],
-            'cancer_gene_description': self.cancer_genes.get(gene_symbol, '')
+            'cancer_gene_description': self.cancer_genes.get(gene_symbol, ''),
+            'clinical_impact': 'Yüksek' if effect == 'frameshift_variant' else 
+                             'Orta' if effect in ['inframe_deletion', 'inframe_insertion'] else 
+                             'Düşük' if effect in ['transition', 'transversion'] else 'Belirsiz'
         }
         return result
-
 class VCFAnalyzer(VariantAnnotator):
     def __init__(self):
         super().__init__()
@@ -461,6 +472,111 @@ class VCFAnalyzer(VariantAnnotator):
             self.update_status(f"Hata: {str(e)}")
             messagebox.showerror("Hata", str(e))
 
+    def save_excel_report(self, df, patient_id, panel_type, panel_report=None):
+        """Geliştirilmiş Excel raporu"""
+        try:
+            output_file = f"{patient_id}_mutation_analysis.xlsx"
+            with pd.ExcelWriter(output_file, engine='xlsxwriter') as writer:
+                # Sütun sıralaması
+                column_order = [
+                    'gene_symbol',
+                    'chromosome',
+                    'position',
+                    'reference',
+                    'alternate',
+                    'variant_type',
+                    'variant_effect',
+                    'mutation_type',
+                    'protein_impact',
+                    'protein_function',
+                    'clinical_impact',
+                    'is_cancer_gene',
+                    'cancer_gene_description',
+                    'in_clinvar',
+                    'clinvar_significance',
+                    'clinvar_review_status',
+                    'transcript'
+                ]
+                
+                # Tüm varyantlar
+                df_ordered = df[column_order]
+                df_ordered.to_excel(writer, sheet_name='All_Variants', index=False)
+                
+                # Kanser genleri
+                cancer_variants = df[df['is_cancer_gene']].sort_values(
+                    by=['clinical_impact', 'gene_symbol'],
+                    ascending=[False, True]
+                )[column_order]
+                if not cancer_variants.empty:
+                    cancer_variants.to_excel(writer, sheet_name='Cancer_Genes', index=False)
+                
+                # Panel-spesifik varyantlar
+                if panel_type != "all":
+                    panel_genes = self.solid_panel_genes if panel_type == "solid" else self.lung_panel_genes
+                    panel_variants = df[df['gene_symbol'].isin(panel_genes)][column_order]
+                    if not panel_variants.empty:
+                        panel_variants.to_excel(writer, sheet_name='Panel_Variants', index=False)
+                
+                # Yüksek etkili varyantlar
+                high_impact = df[df['clinical_impact'] == 'Yüksek'][column_order]
+                if not high_impact.empty:
+                    high_impact.to_excel(writer, sheet_name='High_Impact_Variants', index=False)
+                
+                # Özet istatistikler
+                summary_data = {
+                    'Metrik': [
+                        'Toplam Varyant Sayısı',
+                        'Kanser Geni Varyantları',
+                        'ClinVar Varyantları',
+                        'Frameshift Varyant Sayısı',
+                        'SNV Sayısı',
+                        'İnsersiyon Sayısı',
+                        'Delesyon Sayısı',
+                        'Transition Sayısı',
+                        'Transversion Sayısı',
+                        'Yüksek Etkili Varyant Sayısı',
+                        'Orta Etkili Varyant Sayısı',
+                        'Düşük Etkili Varyant Sayısı'
+                    ],
+                    'Değer': [
+                        len(df),
+                        len(cancer_variants),
+                        df['in_clinvar'].sum(),
+                        len(df[df['variant_effect'] == 'frameshift_variant']),
+                        len(df[df['variant_type'] == 'SNV']),
+                        len(df[df['variant_type'] == 'Insertion']),
+                        len(df[df['variant_type'] == 'Deletion']),
+                        len(df[df['variant_effect'] == 'transition']),
+                        len(df[df['variant_effect'] == 'transversion']),
+                        len(df[df['clinical_impact'] == 'Yüksek']),
+                        len(df[df['clinical_impact'] == 'Orta']),
+                        len(df[df['clinical_impact'] == 'Düşük'])
+                    ]
+                }
+                
+                if panel_type != "all":
+                    panel_genes = self.solid_panel_genes if panel_type == "solid" else self.lung_panel_genes
+                    panel_variants = df[df['gene_symbol'].isin(panel_genes)]
+                    summary_data['Metrik'].extend([
+                        'Panel Genleri Varyantları',
+                        'Panel Genleri Oranı (%)'
+                    ])
+                    summary_data['Değer'].extend([
+                        len(panel_variants),
+                        round(len(panel_variants) / len(df) * 100, 2)
+                    ])
+                
+                pd.DataFrame(summary_data).to_excel(writer, sheet_name='Summary', index=False)
+            
+            print(f"Excel raporu başarıyla kaydedildi: {output_file}")
+            # Excel dosyasını otomatik aç
+            if os.path.exists(output_file):
+                os.startfile(output_file)
+                
+        except Exception as e:
+            print(f"Excel raporu oluşturulurken hata oluştu: {str(e)}")
+            messagebox.showerror("Hata", f"Excel raporu oluşturulamadı: {str(e)}")
+
     def create_visualizations(self, df, patient_id, panel_type):
         """Geliştirilmiş görselleştirmeler"""
         sns.set_theme(style="whitegrid")
@@ -494,116 +610,19 @@ class VCFAnalyzer(VariantAnnotator):
         sns.countplot(data=df, y='variant_effect')
         plt.title('Varyant Etki Dağılımı')
         
-        # 4. Yolak dağılımı
+        # 4. Klinik etki dağılımı
         plt.subplot(2, 3, 4)
-        pathway_data = []
-        for _, row in df[df['is_cancer_gene']].iterrows():
-            pathway_data.append(self.cancer_genes.get(row['gene_symbol'], 'Diğer'))
-        pathway_series = pd.Series(pathway_data)
-        if not pathway_series.empty:
-            sns.countplot(y=pathway_series, order=pathway_series.value_counts().head(10).index)
-            plt.title('En Sık Görülen Yolaklar (Top 10)')
+        sns.countplot(data=df, y='clinical_impact')
+        plt.title('Klinik Etki Dağılımı')
         
-        # 5. Kanser geni oranı
+        # 5. Protein etki dağılımı
         plt.subplot(2, 3, 5)
-        if panel_type != "all":
-            panel_genes = self.solid_panel_genes if panel_type == "solid" else self.lung_panel_genes
-            ratio_labels = ['Panel Genleri', 'Diğer Genler']
-            ratio_values = [
-                len(df[df['gene_symbol'].isin(panel_genes)]),
-                len(df[~df['gene_symbol'].isin(panel_genes)])
-            ]
-        else:
-            ratio_labels = ['Kanser Genleri', 'Diğer Genler']
-            ratio_values = [
-                len(df[df['is_cancer_gene']]),
-                len(df[~df['is_cancer_gene']])
-            ]
-        plt.pie(ratio_values, labels=ratio_labels, autopct='%1.1f%%')
-        plt.title('Gen Dağılım Oranı')
+        sns.countplot(data=df, y='protein_function')
+        plt.title('Protein Fonksiyon Dağılımı')
         
         plt.tight_layout()
         plt.savefig(f'{patient_id}_analysis_plots.png', dpi=300, bbox_inches='tight')
         plt.close()
-
-    def save_excel_report(self, df, patient_id, panel_type, panel_report=None):
-        """Geliştirilmiş Excel raporu"""
-        try:
-            output_file = f"{patient_id}_mutation_analysis.xlsx"
-            with pd.ExcelWriter(output_file, engine='xlsxwriter') as writer:
-                workbook = writer.book
-                
-                # Tüm varyantlar
-                df.to_excel(writer, sheet_name='All_Variants', index=False)
-                
-                # Kanser genleri
-                cancer_variants = df[df['is_cancer_gene']].sort_values(
-                    by=['variant_effect', 'gene_symbol'],
-                    ascending=[False, True]
-                )
-                if not cancer_variants.empty:
-                    cancer_variants.to_excel(writer, sheet_name='Cancer_Genes', index=False)
-                
-                # Panel-spesifik varyantlar
-                if panel_type != "all":
-                    panel_genes = self.solid_panel_genes if panel_type == "solid" else self.lung_panel_genes
-                    panel_variants = df[df['gene_symbol'].isin(panel_genes)]
-                    if not panel_variants.empty:
-                        panel_variants.to_excel(writer, sheet_name='Panel_Variants', index=False)
-                
-                # Yüksek etkili varyantlar
-                high_impact = df[df['variant_effect'].isin(['frameshift_variant', 'inframe_deletion'])]
-                if not high_impact.empty:
-                    high_impact.to_excel(writer, sheet_name='High_Impact_Variants', index=False)
-                
-                # Özet istatistikler
-                summary_data = {
-                    'Metrik': [
-                        'Toplam Varyant Sayısı',
-                        'Kanser Geni Varyantları',
-                        'ClinVar Varyantları',
-                        'Frameshift Varyant Sayısı',
-                        'SNV Sayısı',
-                        'İnsersiyon Sayısı',
-                        'Delesyon Sayısı',
-                        'Transition Sayısı',
-                        'Transversion Sayısı'
-                    ],
-                    'Değer': [
-                        len(df),
-                        len(cancer_variants),
-                        df['in_clinvar'].sum(),
-                        len(df[df['variant_effect'] == 'frameshift_variant']),
-                        len(df[df['variant_type'] == 'SNV']),
-                        len(df[df['variant_type'] == 'Insertion']),
-                        len(df[df['variant_type'] == 'Deletion']),
-                        len(df[df['variant_effect'] == 'transition']),
-                        len(df[df['variant_effect'] == 'transversion'])
-                    ]
-                }
-                
-                if panel_type != "all":
-                    panel_genes = self.solid_panel_genes if panel_type == "solid" else self.lung_panel_genes
-                    panel_variants = df[df['gene_symbol'].isin(panel_genes)]
-                    summary_data['Metrik'].extend([
-                        'Panel Genleri Varyantları',
-                        'Panel Genleri Oranı (%)'
-                    ])
-                    summary_data['Değer'].extend([
-                        len(panel_variants),
-                        round(len(panel_variants) / len(df) * 100, 2)
-                    ])
-                
-                pd.DataFrame(summary_data).to_excel(writer, sheet_name='Summary', index=False)
-            
-            print(f"Excel raporu başarıyla kaydedildi: {output_file}")
-            # Excel dosyasını otomatik aç
-            if os.path.exists(output_file):
-                os.startfile(output_file)
-                
-        except Exception as e:
-            print(f"Excel raporu oluşturulurken hata oluştu: {str(e)}")
-            messagebox.showerror("Hata", f"Excel raporu oluşturulamadı: {str(e)}")
 
     def read_vcf(self, vcf_file):
         variants = []
