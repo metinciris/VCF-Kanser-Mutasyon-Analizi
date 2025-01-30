@@ -1,6 +1,6 @@
 # VCF Kanser Mutasyon Analizi
 
-Bu araç, VCF (Variant Call Format) dosyalarındaki genetik varyantları analiz ederek kanser ile ilişkili mutasyonları tespit eden ve detaylı raporlar oluşturan bir Python uygulamasıdır.
+Bu araç, makine okuması olan, anlamlandırma ve gen eşleştirmesi olmadan gelen VCF (Variant Call Format) dosyalarındaki genetik varyantları analiz ederek kanser ile ilişkili mutasyonları tespit eden ve detaylı raporlar oluşturan bir Python uygulamasıdır.
 
 ![Program Arayüzü](screen.PNG)
 
