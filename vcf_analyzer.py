@@ -659,3 +659,67 @@ class VCFAnalyzer(VariantAnnotator):
 if __name__ == "__main__":
     analyzer = VCFAnalyzer()
     analyzer.run()
+def create_panel_specific_report(self, df, panel_type="solid"):
+    """Panel tipine özel rapor oluştur"""
+    panel_genes = self.solid_panel_genes if panel_type == "solid" else self.lung_panel_genes
+    panel_variants = df[df['gene_symbol'].isin(panel_genes)]
+    
+    report = {
+        'Panel Tipi': panel_type.upper(),
+        'Analiz Edilen Panel Genleri': len(panel_genes),
+        'Bulunan Panel Varyantları': len(panel_variants),
+        'Gen Bazlı Bulgular': {},
+        'Yolak Analizi': {}
+    }
+    
+    # Gen bazlı analiz
+    for gene in panel_genes:
+        gene_variants = panel_variants[panel_variants['gene_symbol'] == gene]
+        if not gene_variants.empty:
+            report['Gen Bazlı Bulgular'][gene] = {
+                'Varyant Sayısı': len(gene_variants),
+                'Varyant Tipleri': gene_variants['variant_effect'].unique().tolist(),
+                'Protein Etkileri': gene_variants['protein_impact'].unique().tolist(),
+                'Klinik Etkiler': gene_variants['clinical_impact'].unique().tolist(),
+                'Yolak': self.cancer_genes.get(gene, 'Bilinmiyor')
+            }
+    
+    # Yolak analizi
+    pathway_variants = {}
+    for _, variant in panel_variants.iterrows():
+        gene = variant['gene_symbol']
+        pathway = self.cancer_genes.get(gene, 'Diğer')
+        if pathway not in pathway_variants:
+            pathway_variants[pathway] = {
+                'Varyant Sayısı': 0,
+                'Genler': set(),
+                'Yüksek Etkili': 0,
+                'Orta Etkili': 0,
+                'Düşük Etkili': 0
+            }
+        pathway_variants[pathway]['Varyant Sayısı'] += 1
+        pathway_variants[pathway]['Genler'].add(gene)
+        if variant['clinical_impact'] == 'Yüksek':
+            pathway_variants[pathway]['Yüksek Etkili'] += 1
+        elif variant['clinical_impact'] == 'Orta':
+            pathway_variants[pathway]['Orta Etkili'] += 1
+        elif variant['clinical_impact'] == 'Düşük':
+            pathway_variants[pathway]['Düşük Etkili'] += 1
+    
+    # Genleri listeye çevir
+    for pathway in pathway_variants:
+        pathway_variants[pathway]['Genler'] = list(pathway_variants[pathway]['Genler'])
+    
+    report['Yolak Analizi'] = pathway_variants
+    
+    # Özet istatistikler ekle
+    report['Özet İstatistikler'] = {
+        'Yüksek Etkili Varyant Sayısı': len(panel_variants[panel_variants['clinical_impact'] == 'Yüksek']),
+        'Orta Etkili Varyant Sayısı': len(panel_variants[panel_variants['clinical_impact'] == 'Orta']),
+        'Düşük Etkili Varyant Sayısı': len(panel_variants[panel_variants['clinical_impact'] == 'Düşük']),
+        'Frameshift Varyant Sayısı': len(panel_variants[panel_variants['variant_effect'] == 'frameshift_variant']),
+        'Protein Modifikasyonu': len(panel_variants[panel_variants['protein_impact'] == 'Protein Modifikasyonu']),
+        'ClinVar Varyantları': panel_variants['in_clinvar'].sum()
+    }
+    
+    return report
